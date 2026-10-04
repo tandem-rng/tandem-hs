@@ -9,7 +9,7 @@ import Data.List (mapAccumL, nub)
 import Data.Vector.Unboxed qualified as U
 import Data.Vector.Unboxed.Mutable qualified as MU
 import Data.Word (Word32, Word64, Word8)
-import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, castWord64ToDouble)
+import GHC.Float (castDoubleToWord64, castFloatToWord32)
 import System.Random qualified as R
 import System.Random.Stateful qualified as RS
 import Test.Tasty (TestTree, defaultMain, testGroup)
@@ -24,7 +24,7 @@ main =
   defaultMain $
     testGroup
       "tandem"
-      [specVectors, streamDumps, cache, crossFixtures, bitHashes, derivedFills, positions, randomGen]
+      [specVectors, streamDumps, cache, crossFixtures, bitHashes, derivedFills, distributions, positions, randomGen]
 
 -- | @n@ scalar draws.
 draws :: Int -> (Tandem -> (a, Tandem)) -> Tandem -> ([a], Tandem)
@@ -136,6 +136,9 @@ streamDumps =
     , dump "seed42_K32_f64.bin" s42 8 fillDouble fillDoubleM nextDouble castDoubleToWord64 id
     , dump "seed42_K32_c32.bin" s42 4 fillFloat fillFloatM nextFloat castFloatToWord32 fromIntegral
     , dump "seed42_K32_c64.bin" s42 8 fillDouble fillDoubleM nextDouble castDoubleToWord64 id
+    , testCase "seed42_K32_u8.bin" $ do
+        want <- B.readFile "tests/data/seed42_K32_u8.bin"
+        fst (draws (B.length want) R.genWord8 s42) @?= B.unpack want
     ]
   where
     k32 = fromKey vectorKey 0 32
@@ -199,15 +202,12 @@ crossFixtures =
             (fs, h) = draws 64 nextNormalPairFloat start
         (concatMap (\(c, s) -> map castDoubleToWord64 [c, s]) ps, position g) @?= normalPairs
         (concatMap (\(c, s) -> map castFloatToWord32 [c, s]) fs, position h) @?= normalPairsFloat
-    -- tandem-c's copy of this fixture predates the explicit fused multiply-adds of the device
-    -- core, so it holds to Appendix A's tolerance, not bit for bit.
-    , testCase "tandem-cuda normal fills" $ do
-        forM_ cudaNormal64 $ \(p, n, want) ->
-          forM_ (zip (U.toList (fst (fillNormal n (fromKey cudaKey p 32)))) (map castWord64ToDouble want)) $
-            \(x, w) -> assertBool (show (x, w)) (abs (x - w) <= 1e-12 * abs w + 1e-15)
-        forM_ cudaNormal32 $ \(p, n, want) ->
-          forM_ (zip (U.toList (fst (fillNormalFloat n (fromKey cudaKey p 32)))) (map castWord32ToFloat want)) $
-            \(x, w) -> assertBool (show (x, w)) (abs (x - w) <= 16 * 0x1p-23 * abs w + 1e-6)
+    , testCase "tandem-cuda normal and exponential fills" $ do
+        let at p = fromKey cudaKey p 32
+        forM_ cudaNormal64 $ \(p, n, want) -> bits64 (fst (fillNormal n (at p))) @?= want
+        forM_ cudaNormal32 $ \(p, n, want) -> bits32 (fst (fillNormalFloat n (at p))) @?= want
+        forM_ cudaExponential64 $ \(p, n, want) -> bits64 (fst (fillExponential n (at p))) @?= want
+        forM_ cudaExponential32 $ \(p, n, want) -> bits32 (fst (fillExponentialFloat n (at p))) @?= want
     , testCase "exponentials" $ do
         forM_ exponentials $ \(p, want, end) -> do
           let (v, g) = fillExponential 64 (seek p (seed 42))
@@ -304,13 +304,6 @@ derivedFills =
               (vf, gf) = fillExponentialFloat n g
           (U.toList v, position g') @?= (xs, position h)
           (U.toList vf, position gf) @?= (fs, position hf)
-    , testCase "normals have unit moments" $ do
-        let v = fst (fillNormal 1000000 (seed 4))
-            n = fromIntegral (U.length v)
-            mean = U.sum v / n
-            var = U.sum (U.map (\x -> (x - mean) ^ (2 :: Int)) v) / n
-        assertBool ("mean " ++ show mean) (abs mean < 5 / sqrt n)
-        assertBool ("variance " ++ show var) (abs (var - 1) < 5 * sqrt (2 / n))
     ]
   where
     cutEquals
@@ -325,6 +318,60 @@ derivedFills =
             u <- U.freeze m
             pure (U.toList u, position h)
       run [c, 300 - c] @?= run [300]
+
+-- Distributions ---------------------------------------------------------------------------
+
+-- | Raw moments 1 to 4 of 10^7 draws, each within 5 standard errors of the exact value, and the
+-- Kolmogorov-Smirnov distance under its 0.1% critical value.
+distributions :: TestTree
+distributions =
+  testGroup
+    "distributions"
+    [ check "normal" normalMoments normalCdf (fst (fillNormal n (seed 4)))
+    , check "normal Float" normalMoments normalCdf (toDouble (fst (fillNormalFloat n (seed 5))))
+    , check "exponential" expMoments expCdf (fst (fillExponential n (seed 6)))
+    , check "exponential Float" expMoments expCdf (toDouble (fst (fillExponentialFloat n (seed 7))))
+    ]
+  where
+    n = 10000000
+    toDouble = U.map realToFrac
+    normalMoments = [0, 1, 0, 3, 0, 15, 0, 105]
+    expMoments = [1, 2, 6, 24, 120, 720, 5040, 40320]
+    expCdf x = 1 - exp (negate x)
+    check name exact cdf v = testCase name $ do
+      let size = fromIntegral (U.length v)
+      forM_ [1 .. 4] $ \k -> do
+        let m = U.sum (U.map (^ k) v) / size
+            mu = exact !! (k - 1)
+            se = sqrt ((exact !! (2 * k - 1) - mu * mu) / size)
+        assertBool ("moment " ++ show k ++ ": " ++ show m) (abs (m - mu) < 5 * se)
+      let d = ksDistance cdf v
+      assertBool ("KS distance " ++ show d) (d < 1.95 / sqrt size)
+
+-- | The KS distance from counts in 2^22 equal bins of the CDF's range. Binning changes it by at
+-- most a bin width plus the fullest bin's share, both far below the critical value at 10^7.
+ksDistance :: (Double -> Double) -> U.Vector Double -> Double
+ksDistance cdf v = U.maximum (U.imap gap (U.scanl1' (+) counts))
+  where
+    bins = 2 ^ (22 :: Int)
+    size = fromIntegral (U.length v) :: Double
+    counts = runST $ do
+      c <- MU.replicate bins (0 :: Int)
+      U.forM_ v $ \x -> MU.unsafeModify c (+ 1) (min (bins - 1) (floor (cdf x * fromIntegral bins)))
+      U.unsafeFreeze c
+    gap i c = abs (fromIntegral c / size - fromIntegral (i + 1) / fromIntegral bins)
+
+-- | The standard normal CDF through Numerical Recipes' erfc, good to 1.2e-7 relative.
+normalCdf :: Double -> Double
+normalCdf x = 0.5 * erfc (negate x / sqrt 2)
+  where
+    erfc z
+      | z < 0 = 2 - erfc (negate z)
+      | otherwise =
+          let t = 1 / (1 + 0.5 * z)
+           in t * exp (negate (z * z) - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418
+                + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587
+                + t * (-0.82215223 + t * 0.17087277)))))))))
 
 -- Positions -------------------------------------------------------------------------------
 
