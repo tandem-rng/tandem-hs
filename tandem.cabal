@@ -1,0 +1,110 @@
+cabal-version:   3.12
+name:            tandem
+version:         0.1.0.0
+synopsis:
+  Tandem8x32: a pseudorandom number generator fast on CPUs and GPUs alike
+
+description:
+  A pure, splittable implementation of the Tandem8x32 specification: uniform
+  draws and fills, bounded integers, normals and exponentials bit for bit equal
+  to the other ports, and instances for the random package.
+
+license:         Apache-2.0
+license-file:    LICENSE
+author:          Jessica Cox
+maintainer:      jmcox@posteo.de
+category:        Random
+build-type:      Simple
+tested-with:     GHC ==9.12.4 || ==9.14.1
+extra-doc-files:
+  NOTICE
+  README.md
+
+extra-source-files: tests/data/*.bin
+
+flag fma
+  description:
+    Emit FMA instructions for the normals and exponentials on x86-64. Needs a
+    CPU with FMA3. Without it the fused multiply-adds call the C library.
+
+  default:     False
+  manual:      True
+
+flag tools
+  description: Build the dump tool that writes the normal and exponential fills.
+  default:     False
+  manual:      True
+
+common common
+  default-language: GHC2024
+  ghc-options:      -Wall
+
+library
+  import:          common
+  hs-source-dirs:  src
+  exposed-modules:
+    System.Random.Tandem
+    System.Random.Tandem.Core
+
+  other-modules:
+    System.Random.Tandem.Derived
+    System.Random.Tandem.Generator
+    System.Random.Tandem.Math
+
+  build-depends:
+    , base       >=4.20 && <5
+    , primitive  >=0.9  && <0.10
+    , random     >=1.3  && <1.4
+    , vector     >=0.13 && <0.14
+
+  ghc-options:     -O2
+
+  if (flag(fma) && arch(x86_64))
+    ghc-options: -mfma
+
+test-suite tests
+  import:         common
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: tests
+  main-is:        Main.hs
+  other-modules:  Fixtures
+  build-depends:
+    , base
+    , bytestring  >=0.11 && <0.13
+    , random
+    , tandem
+    , tasty       >=1.4  && <1.6
+    , tasty-hunit >=0.10 && <0.11
+    , vector
+
+  ghc-options:    -rtsopts
+
+benchmark bench
+  import:         common
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: bench
+  main-is:        Bench.hs
+  build-depends:
+    , base
+    , mwc-random  >=0.15 && <0.16
+    , random
+    , tandem
+    , tasty-bench >=0.4  && <0.6
+    , vector
+
+  ghc-options:    -O2 -rtsopts
+
+executable tandem-dump
+  import:         common
+  hs-source-dirs: tools
+  main-is:        Dump.hs
+  build-depends:
+    , base
+    , bytestring  >=0.11 && <0.13
+    , tandem
+    , vector
+
+  ghc-options:    -O2
+
+  if !flag(tools)
+    buildable: False
