@@ -157,7 +157,7 @@ wordRef k kk p =
 cache :: TestTree
 cache = testCase "random access at every chunk length" $
   forM_ [1, 2, 8, 32, 65536] $ \kk ->
-    forM_ [(0, 1100), (3 * 1024 + 7, 40), (5 * 1024 * 31 - 64, 900), (2 ^ (40 :: Int) + 96, 300), (32, 5)] $ \(p0, n) -> do
+    forM_ [(0, 1100), (3 * 1024 + 7, 40), (5 * 1024 * 31 - 64, 900), (2 ^ (40 :: Int) + 96, 300), (32, 5), (2 ^ (63 :: Int) - 1000, 2000), (2 ^ (63 :: Int) - 100, 40)] $ \(p0, n) -> do
       let g = seek 999999 (snd (fillWord32 3 (fromKey vectorKey 70000 kk)))
           (v, g') = fillWord32 n (seek p0 g)
           p = (p0 + 31) .&. complement31
