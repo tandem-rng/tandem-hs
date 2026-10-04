@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} GHC ${{ matrix.ghc }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, ghc: '9.14' }
+          - { os: macos-latest, ghc: '9.14' }
+          - { os: ubuntu-latest, ghc: '9.12' }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: haskell-actions/setup@v2
+        id: setup
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: latest
+      - run: cabal configure --enable-tests --enable-benchmarks && cabal build all --dry-run
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-
+      - run: cabal build all
+      - run: cabal test --test-show-details=direct
+      - run: cabal build -f tools exe:tandem-dump
+      - name: Dumps hash as tandem-c's
+        run: |
+          dump=$(cabal list-bin -f tools exe:tandem-dump)
+          test "$($dump normals | shasum -a 256 | cut -d' ' -f1)" = cfae418807a7d5f91ecd3e42c33a00943690c6e4b888ee39206738783efe9ded
+          test "$($dump exponentials | shasum -a 256 | cut -d' ' -f1)" = 5c035a4ef1368231d25a9c2f9201be2df3224e28a14549a50625d0db3770ef4e
+      - name: Fused multiply-adds lower to instructions
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            tools/fma-asm.sh | tee plain.txt
+            grep -q '^fused 0$' plain.txt && ! grep -q '^calls 0$' plain.txt
+            tools/fma-asm.sh -mfma | tee fma.txt
+          else
+            tools/fma-asm.sh | tee fma.txt
+          fi
+          ! grep -q '^fused 0$' fma.txt && grep -q '^calls 0$' fma.txt
+      - name: Tests with -mfma
+        if: runner.os == 'Linux'
+        run: cabal test -f fma --test-show-details=direct
