@@ -3,6 +3,7 @@
 # tandem-hs
 
 [![CI](https://github.com/tandem-rng/tandem-hs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tandem-rng/tandem-hs/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-tandem--rng.github.io-7fb3ee.svg)](https://tandem-rng.github.io/tandem-hs/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
 Haskell implementation of [Tandem8x32](https://github.com/tandem-rng/spec), a noncryptographic
@@ -31,9 +32,10 @@ example = (x, zs, k)
     (k, _) = T.nextBelow32 10 worker     -- uniform in [0, 10), Lemire
 ```
 
-`Tandem` is a `RandomGen` and `SplitGen` of `random` 1.3. See [docs/notes.md](docs/notes.md)
-for the API, tests and speed.
+`Tandem` is a `RandomGen` and `SplitGen` of `random` 1.3. See [API](docs/api.md) for every
+draw and fill, and [design](docs/design.md), [tests](docs/tests.md) and [speed](docs/speed.md)
+for the rest.
 
 Portions of the code were generated with the assistance of LLMs.
 
-[Documentation](docs/notes.md) · [Apache 2.0 license](LICENSE)
+[Documentation](https://tandem-rng.github.io/tandem-hs/) · [Apache 2.0 license](LICENSE)

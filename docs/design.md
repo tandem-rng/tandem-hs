@@ -1,0 +1,41 @@
+# Design
+
+## Fills
+
+Fills of 1024 or more elements call the vendored tandem-c. Shorter fills and scalar draws run
+in Haskell. Both give the same values.
+
+## Bounded integers
+
+Bounded fills follow Appendix A: element `i` takes draw `i`, so a fill consumes exactly one
+draw per element, and a rejected draw retries on `split g` of `purpose 0x424c573332` (or
+`0x424c573634`) of the fill's key, where `g` is the draw's index in the stream. A fill cut at
+any element equals the whole fill. `fillBelow` takes the draw width from the range: 32-bit
+draws for a range up to 2^32, 64-bit draws above.
+
+## Normals
+
+Normals are Box-Muller. Pair `j` is elements `2j` and `2j + 1` from draws `2j` and `2j + 1`,
+the cosine half first. An odd length writes the cosine half of its last pair and still consumes
+both draws. The scalar normal is element 0 of a fill.
+
+## Exponentials
+
+Exponentials are `-ln(1 - u)` from one draw each.
+
+## Fused multiply-adds
+
+The normals and exponentials copy tandem-c's polynomials with the same operation order. Every
+multiply-add is GHC's `fmaddDouble#` or `fmaddFloat#` primop, and GHC never contracts a plain
+product and sum, so the values equal tandem-c's bit for bit on every target.
+
+The native code generator lowers the primops without `-fllvm`.
+
+- On aarch64 it emits `fmadd` instructions.
+- On x86-64 it emits `vfmadd` instructions with `-mfma`. Without `-mfma` it calls the C library's
+  `fma`, which gives the same bits more slowly. The package flag `fma` adds `-mfma`, for CPUs
+  with FMA3: `cabal build -f fma`.
+
+`tools/fma-asm.sh [-mfma]` counts both in the generated assembly. CI checks both cases. The
+vendored `tandem.c` builds with `-ffp-contract=off` and picks its AVX2 and FMA copy at run time on
+x86-64.
