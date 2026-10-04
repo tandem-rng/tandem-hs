@@ -19,11 +19,14 @@ module System.Random.Tandem.Derived
 import Control.Monad.Primitive (PrimMonad, PrimState, stToPrim)
 import Control.Monad.ST (ST)
 import Data.Bits (shiftR)
+import Data.Vector.Primitive.Mutable qualified as P
+import Data.Vector.Unboxed.Base qualified as U
 import Data.Vector.Unboxed.Mutable qualified as MU
 import Data.Word (Word32, Word64)
 
 import System.Random.Tandem.Generator
 import System.Random.Tandem.Math
+import System.Random.Tandem.Native
 
 -- Bounded integers ------------------------------------------------------------------------
 
@@ -71,8 +74,9 @@ fillBelow32M :: PrimMonad m => Word32 -> MU.MVector (PrimState m) Word32 -> Tand
 fillBelow32M n v g = stToPrim (below32 n v g)
 
 below32 :: Word32 -> MU.MVector s Word32 -> Tandem -> ST s Tandem
-below32 n v g
-  | MU.null v = pure g
+below32 n v@(U.MV_Word32 (P.MVector off len mba)) g
+  | len == 0 = pure g
+  | len >= nativeMin = native 32 len (\p a i c -> keyed g cFillU32Below p a i c n) mba off len g
   | otherwise = do
       g' <- fillWord32M v g
       bound mul32 nextWord32 (fallbackOf purposeBelow32 g) (align (position g) 32 `shiftR` 5) n v
@@ -83,8 +87,9 @@ fillBelow64M :: PrimMonad m => Word64 -> MU.MVector (PrimState m) Word64 -> Tand
 fillBelow64M n v g = stToPrim (below64 n v g)
 
 below64 :: Word64 -> MU.MVector s Word64 -> Tandem -> ST s Tandem
-below64 n v g
-  | MU.null v = pure g
+below64 n v@(U.MV_Word64 (P.MVector off len mba)) g
+  | len == 0 = pure g
+  | len >= nativeMin = native 64 len (\p a i c -> keyed g cFillU64Below p a i c n) mba off len g
   | otherwise = do
       g' <- fillWord64M v g
       bound mul64 nextWord64 (fallbackOf purposeBelow64 g) (align (position g) 64 `shiftR` 6) n v
@@ -144,13 +149,9 @@ nextExponential g = let !(u, g') = nextDouble g; !e = 0.5 * neg2Log (1 - u) in (
 nextExponentialFloat :: Tandem -> (Float, Tandem)
 nextExponentialFloat g = let !(u, g') = nextFloat g; !e = 0.5 * neg2LogF (1 - u) in (e, g')
 
--- | Elements per block of the derived fills: the uniforms of a block are still in the cache when
--- they are mapped in place.
-blockLength :: Int
-blockLength = 4096
-
--- | Run @fill@ and then @mapBlock@ on consecutive blocks of the first @m@ elements.
-blocks
+-- | Run @fill@ on the first @m@ elements and map them in place. An empty fill leaves the
+-- position as it is, unlike a plain fill.
+mapped
   :: MU.Unbox a
   => (MU.MVector s a -> Tandem -> ST s Tandem)
   -> (MU.MVector s a -> ST s ())
@@ -158,16 +159,14 @@ blocks
   -> MU.MVector s a
   -> Tandem
   -> ST s Tandem
-blocks fill mapBlock m v = go 0
-  where
-    go i g
-      | i >= m = pure g
-      | otherwise = do
-          let b = MU.unsafeSlice i (min blockLength (m - i)) v
-          g' <- fill b g
-          mapBlock b
-          go (i + blockLength) g'
-{-# INLINE blocks #-}
+mapped fill f m v g
+  | m == 0 = pure g
+  | otherwise = do
+      let b = MU.unsafeSlice 0 m v
+      g' <- fill b g
+      f b
+      pure g'
+{-# INLINE mapped #-}
 
 pairs :: MU.Unbox a => (a -> a -> (a, a)) -> MU.MVector s a -> ST s ()
 pairs f b = go 0
@@ -196,11 +195,15 @@ each f b = go 0
 -- 'nextNormalPair' draws. An odd length writes the cosine half of its last pair and still
 -- consumes both draws. An empty fill leaves the position as it is.
 fillNormalM :: PrimMonad m => MU.MVector (PrimState m) Double -> Tandem -> m Tandem
-fillNormalM v g = stToPrim (normals fillDoubleM boxMuller nextNormal v g)
+fillNormalM v@(U.MV_Double (P.MVector off n mba)) g
+  | n >= nativeMin = stToPrim (native 64 (n + n `rem` 2) (keyed g cFillNormalF64) mba off n g)
+  | otherwise = stToPrim (normals fillDoubleM boxMuller nextNormal v g)
 
 -- | 'fillNormalM' in single precision from the 'Float' fill.
 fillNormalFloatM :: PrimMonad m => MU.MVector (PrimState m) Float -> Tandem -> m Tandem
-fillNormalFloatM v g = stToPrim (normals fillFloatM boxMullerF nextNormalFloat v g)
+fillNormalFloatM v@(U.MV_Float (P.MVector off n mba)) g
+  | n >= nativeMin = stToPrim (native 32 (n + n `rem` 2) (keyed g cFillNormalF32) mba off n g)
+  | otherwise = stToPrim (normals fillFloatM boxMullerF nextNormalFloat v g)
 
 normals
   :: MU.Unbox a
@@ -212,7 +215,7 @@ normals
   -> ST s Tandem
 normals fill pair next v g = do
   let n = MU.length v
-  g' <- blocks fill (pairs pair) (n - n `rem` 2) v g
+  g' <- mapped fill (pairs pair) (n - n `rem` 2) v g
   if odd n
     then let !(z, g'') = next g' in MU.unsafeWrite v (n - 1) z >> pure g''
     else pure g'
@@ -221,8 +224,12 @@ normals fill pair next v g = do
 -- | Fill with standard exponentials. Element @i@ comes from draw @i@ of the 'Double' fill, so the
 -- fill equals the scalar 'nextExponential' draws. An empty fill leaves the position as it is.
 fillExponentialM :: PrimMonad m => MU.MVector (PrimState m) Double -> Tandem -> m Tandem
-fillExponentialM v g = stToPrim (blocks fillDoubleM (each (\u -> 0.5 * neg2Log (1 - u))) (MU.length v) v g)
+fillExponentialM v@(U.MV_Double (P.MVector off n mba)) g
+  | n >= nativeMin = stToPrim (native 64 n (keyed g cFillExponentialF64) mba off n g)
+  | otherwise = stToPrim (mapped fillDoubleM (each (\u -> 0.5 * neg2Log (1 - u))) n v g)
 
 -- | 'fillExponentialM' in single precision from the 'Float' fill.
 fillExponentialFloatM :: PrimMonad m => MU.MVector (PrimState m) Float -> Tandem -> m Tandem
-fillExponentialFloatM v g = stToPrim (blocks fillFloatM (each (\u -> 0.5 * neg2LogF (1 - u))) (MU.length v) v g)
+fillExponentialFloatM v@(U.MV_Float (P.MVector off n mba)) g
+  | n >= nativeMin = stToPrim (native 32 n (keyed g cFillExponentialF32) mba off n g)
+  | otherwise = stToPrim (mapped fillFloatM (each (\u -> 0.5 * neg2LogF (1 - u))) n v g)

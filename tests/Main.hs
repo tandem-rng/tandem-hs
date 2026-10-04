@@ -261,10 +261,26 @@ derivedFills =
   testGroup
     "derived fills"
     [ testCase "bounded fills cut anywhere equal the whole" $
-        forM_ [1, 12345, 100000] $ \p -> forM_ [1, 7, 100, 299] $ \c -> do
+        forM_ [1, 12345, 100000] $ \p -> forM_ [1, 7, 300, 1000, 2999] $ \c -> do
           let g = seek p (seed2 5 6)
           cutEquals c (fillBelow32M 0xc0000001) g
           cutEquals c (fillBelow64M 0xc000000000000001) g
+    , testCase "fills longer than one tandem-c call" $ do
+        let n = 2 ^ (20 :: Int) + 3
+            k = n - 7
+            g = seek 77 (seed 8)
+            from w = seek ((77 + w - 1) `div` w * w + w * fromIntegral k) g
+            check :: (U.Unbox a, Eq a, Show a) => (Int -> Tandem -> (U.Vector a, Tandem)) -> Word64 -> IO ()
+            check fill w = do
+              let (v, h) = fill n g
+                  (u, h') = fill 7 (from w)
+              (U.drop k v, position h) @?= (u, position h')
+        check fillWord32 32
+        check (fillBelow32 0xc0000001) 32
+        check (fillBelow64 0xc000000000000001) 64
+        check fillNormal 64
+        check fillNormalFloat 32
+        check fillExponential 64
     , testCase "bounded fills of one key share no fallback" $ do
         let g = seed2 5 6
             x = fst (fillBelow32 0xc0000001 300 g)
@@ -311,13 +327,13 @@ derivedFills =
       => Int -> (forall s. MU.MVector s a -> Tandem -> ST s Tandem) -> Tandem -> IO ()
     cutEquals c fillM g = do
       let run cuts = runST $ do
-            m <- MU.new 300
+            m <- MU.new 3000
             let go _ [] h = pure h
                 go i (k : ks) h = fillM (MU.slice i k m) h >>= go (i + k) ks
             h <- go 0 cuts g
             u <- U.freeze m
             pure (U.toList u, position h)
-      run [c, 300 - c] @?= run [300]
+      run [c, 3000 - c] @?= run [3000]
 
 -- Distributions ---------------------------------------------------------------------------
 

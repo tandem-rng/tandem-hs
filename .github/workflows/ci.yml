@@ -4,7 +4,30 @@ on:
   push:
   pull_request:
 
+env:
+  TANDEM_C: 4e9a69f42a3721adfd2eb87c79b6c26b92a2e62a
+  TANDEM_CUDA: 5ceb466db1ea353889c1263a9d7ec36d7781a11c
+  TANDEM_SPEC: ac4c4f9a690772184620a777f252669fe82bd1a5
+
 jobs:
+  vendored:
+    name: vendored C and fixtures match the pinned commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check out the pinned commits
+        run: |
+          for r in tandem-c:$TANDEM_C tandem-cuda:$TANDEM_CUDA spec:$TANDEM_SPEC; do
+            git init -q "../${r%%:*}"
+            git -C "../${r%%:*}" fetch -q --depth 1 "https://github.com/tandem-rng/${r%%:*}" "${r#*:}"
+            git -C "../${r%%:*}" checkout -q FETCH_HEAD
+          done
+      - run: diff ../tandem-c/tandem.c cbits/tandem.c && diff ../tandem-c/tandem.h cbits/tandem.h
+      - run: for f in tests/data/*.bin; do cmp "$f" "../tandem-c/tests/data/$(basename "$f")"; done
+      - run: |
+          python3 tools/gen_fixtures.py ../spec/vectors.json ../tandem-c/tests ../tandem-cuda/tests > tests/Fixtures.hs
+          git diff --exit-code tests/Fixtures.hs
+
   test:
     name: ${{ matrix.os }} GHC ${{ matrix.ghc }}
     runs-on: ${{ matrix.os }}

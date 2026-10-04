@@ -27,6 +27,9 @@ module System.Random.Tandem.Generator
   , mul32
   , mul64
   , lemire
+  , nativeMin
+  , native
+  , keyed
   , fillWord32M
   , fillWord64M
   , fillDoubleM
@@ -35,8 +38,9 @@ module System.Random.Tandem.Generator
 
 import Control.Monad.Primitive (PrimMonad, PrimState, stToPrim)
 import Control.Monad.ST (ST, runST)
+import Control.Monad.ST.Unsafe (unsafeIOToST)
 import Data.Bits (complement, countTrailingZeros, popCount, shiftL, shiftR, unsafeShiftR, (.&.), (.|.))
-import Data.Primitive.ByteArray (MutableByteArray, writeByteArray)
+import Data.Primitive.ByteArray (MutableByteArray (..), writeByteArray)
 import Data.Primitive.PrimArray
   ( MutablePrimArray
   , PrimArray
@@ -50,12 +54,14 @@ import Data.Primitive.Types (Prim)
 import Data.Vector.Primitive.Mutable qualified as P
 import Data.Vector.Unboxed.Base qualified as U
 import Data.Word (Word32, Word64)
-import GHC.Exts (timesWord2#, word64ToWord#, wordToWord64#)
+import Foreign.C.Types (CSize)
+import GHC.Exts (MutableByteArray#, timesWord2#, word64ToWord#, wordToWord64#)
 import GHC.Float (int2Double, int2Float)
 import GHC.Word (Word64 (W64#))
 import System.Random qualified as R
 
 import System.Random.Tandem.Core
+import System.Random.Tandem.Native
 
 -- | A Tandem8x32 generator. It is its transport form, the key, the bit position and the chunk
 -- length @K@, plus a cache of the current 1024-bit row. Equality and 'Show' cover the transport
@@ -383,10 +389,53 @@ toFloat raw = int2Float (fromIntegral (raw `shiftR` 8)) * 0x1p-24
 -- | Writes the 128 bits of one block, four words, as elements from index @i@.
 type PutBlock s = MutableByteArray s -> Int -> Word32 -> Word32 -> Word32 -> Word32 -> ST s ()
 
--- | The fill of @w@-bit elements: the values of as many scalar draws. After alignment the stream
--- is read in whole rows, straight into the output.
-fillPrim :: Prim a => Int -> (Word64 -> a) -> PutBlock s -> P.MVector s a -> Tandem -> ST s Tandem
-fillPrim w conv putBlock (P.MVector off n mba) g0 = do
+-- | Fills of at least this many elements run in the vendored tandem-c, whose SIMD row loops are
+-- several times faster than GHC's scalar code. Shorter fills keep the cached row, which saves
+-- the seeding that every C call pays.
+nativeMin :: Int
+nativeMin = 1024
+
+-- | A tandem-c fill applied to the key words and @K@ of a generator.
+keyed :: Tandem -> (Word32 -> Word32 -> Word32 -> Word32 -> Word64 -> Word32 -> r) -> Word64 -> r
+keyed g f p = let Quad a b c d = tKey g in f a b c d p (tK g)
+{-# INLINE keyed #-}
+
+-- | Run the tandem-c fill @f@ on elements @[off, off + n)@ of the array, in pieces of 2^20
+-- elements so that no unsafe call delays a garbage collection for long. Pieces join exactly,
+-- since every fill ends where the next one starts and the pieces have even lengths. The end of
+-- the @draws@ draws of @w@ bits is checked before anything is written. The cached row stays, as
+-- it depends on the key and the row index only.
+native
+  :: Int
+  -> Int
+  -> (Word64 -> MutableByteArray# s -> CSize -> CSize -> IO Word64)
+  -> MutableByteArray s
+  -> Int
+  -> Int
+  -> Tandem
+  -> ST s Tandem
+native w draws f (MutableByteArray mba) off n g = start w draws (tPos g) `seq` go off (tPos g)
+  where
+    end = off + n
+    go i p
+      | i >= end = pure g {tPos = p}
+      | otherwise = do
+          let c = min (2 ^ (20 :: Int)) (end - i)
+          p' <- unsafeIOToST (f p mba (fromIntegral i) (fromIntegral c))
+          go (i + c) p'
+{-# INLINE native #-}
+
+-- | The fill of @w@-bit elements: the values of as many scalar draws.
+fillPrim :: Prim a => Int -> (Word64 -> a) -> PutBlock s -> NativeFill s -> P.MVector s a -> Tandem -> ST s Tandem
+fillPrim w conv putBlock cfill v@(P.MVector off n mba) g
+  | n >= nativeMin = native w n (keyed g cfill) mba off n g
+  | otherwise = fillRows w conv putBlock v g
+{-# INLINE fillPrim #-}
+
+-- | 'fillPrim' in Haskell. After alignment the stream is read in whole rows, straight into the
+-- output.
+fillRows :: Prim a => Int -> (Word64 -> a) -> PutBlock s -> P.MVector s a -> Tandem -> ST s Tandem
+fillRows w conv putBlock (P.MVector off n mba) g0 = do
   let p0 = start w n (tPos g0)
       perRow = 1024 `quot` w
       nh = min n (fromIntegral ((1024 - (p0 .&. 1023)) `quot` fromIntegral w) `rem` perRow)
@@ -408,7 +457,7 @@ fillPrim w conv putBlock (P.MVector off n mba) g0 = do
   let tailAt = off + nh + nrows * perRow
   g3 <- scalars tailAt (tailAt + nt) (p1 + 1024 * fromIntegral nrows) g2
   pure g3 {tPos = p0 + fromIntegral w * fromIntegral n}
-{-# INLINE fillPrim #-}
+{-# INLINE fillRows #-}
 
 -- | The aligned start of a fill of @n@ elements of @w@ bits, checked so that the fill ends below
 -- @2^64@.
@@ -434,11 +483,11 @@ pair64 a b = fromIntegral a .|. (fromIntegral b `shiftL` 32)
 
 -- | Fill a vector with 32-bit draws.
 fillWord32M :: PrimMonad m => U.MVector (PrimState m) Word32 -> Tandem -> m Tandem
-fillWord32M (U.MV_Word32 v) g = stToPrim (fillPrim 32 fromIntegral put32 v g)
+fillWord32M (U.MV_Word32 v) g = stToPrim (fillPrim 32 fromIntegral put32 cFillU32 v g)
 
 -- | Fill a vector with 64-bit draws.
 fillWord64M :: PrimMonad m => U.MVector (PrimState m) Word64 -> Tandem -> m Tandem
-fillWord64M (U.MV_Word64 v) g = stToPrim (fillPrim 64 id put v g)
+fillWord64M (U.MV_Word64 v) g = stToPrim (fillPrim 64 id put cFillU64 v g)
   where
     put mba i a b c d = do
       writeByteArray mba i (pair64 a b)
@@ -446,7 +495,7 @@ fillWord64M (U.MV_Word64 v) g = stToPrim (fillPrim 64 id put v g)
 
 -- | Fill a vector with uniform 'Double's in @[0, 1)@.
 fillDoubleM :: PrimMonad m => U.MVector (PrimState m) Double -> Tandem -> m Tandem
-fillDoubleM (U.MV_Double v) g = stToPrim (fillPrim 64 toDouble put v g)
+fillDoubleM (U.MV_Double v) g = stToPrim (fillPrim 64 toDouble put cFillF64 v g)
   where
     put mba i a b c d = do
       writeByteArray mba i (toDouble (pair64 a b))
@@ -454,7 +503,7 @@ fillDoubleM (U.MV_Double v) g = stToPrim (fillPrim 64 toDouble put v g)
 
 -- | Fill a vector with uniform 'Float's in @[0, 1)@.
 fillFloatM :: PrimMonad m => U.MVector (PrimState m) Float -> Tandem -> m Tandem
-fillFloatM (U.MV_Float v) g = stToPrim (fillPrim 32 (toFloat . fromIntegral) put v g)
+fillFloatM (U.MV_Float v) g = stToPrim (fillPrim 32 (toFloat . fromIntegral) put cFillF32 v g)
   where
     put mba i a b c d = do
       writeByteArray mba i (toFloat a)

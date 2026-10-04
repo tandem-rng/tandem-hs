@@ -14,7 +14,8 @@ source-repository-package
   location: https://github.com/tandem-rng/tandem-hs
 ```
 
-GHC 9.12 or newer, `GHC2024`. The library depends on `base`, `primitive`, `vector` and `random`.
+GHC 9.12 or newer, `GHC2024`. The library depends on `base`, `primitive`, `vector` and `random`,
+and compiles `cbits/tandem.c`, vendored from tandem-c 4e9a69f, with the C compiler GHC uses.
 
 ## Use
 
@@ -75,6 +76,8 @@ roll = do
   stream. `genWord32R` and `genWord64R` use Lemire's method with the width from the range, so
   `genWord64R` with a range up to 2^32 equals `genWord32R`. `splitGen` is `fork 1`.
 - `System.Random.Tandem.Core`: the step `T`, the seeding function `F` and the blocks.
+- Fills of 1024 or more elements call the vendored tandem-c. Shorter fills and scalar draws run
+  in Haskell. Both give the same values.
 - Parallel use: element `i` of a fill is draw `i`, so any decomposition reproduces a serial run.
   See [Appendix B](https://github.com/tandem-rng/spec/blob/main/SPEC.md#appendix-b-parallel-decomposition-non-normative).
 
@@ -91,7 +94,9 @@ The native code generator lowers the primops without `-fllvm`.
   `fma`, which gives the same bits more slowly. The package flag `fma` adds `-mfma`, for CPUs
   with FMA3: `cabal build -f fma`.
 
-`tools/fma-asm.sh [-mfma]` counts both in the generated assembly. CI checks both cases.
+`tools/fma-asm.sh [-mfma]` counts both in the generated assembly. CI checks both cases. The
+vendored `tandem.c` builds with `-ffp-contract=off` and picks its AVX2 and FMA copy at run time on
+x86-64.
 
 ## Tests
 
@@ -102,16 +107,22 @@ cabal test
 - The specification vectors, the step, the seeding function, blocks, derived keys and seed
   whitening.
 - Fills, scalar draws and fills cut into slices against the stream dumps in `tests/data`, at
-  `K = 8` and `K = 32`. Random access at chunk lengths 1 to 65536 against the definition.
+  `K = 8` and `K = 32`, and `genWord8` against the byte dump. Random access at chunk lengths 1
+  to 65536 against the definition.
 - tandem-c's cross fixtures, exact: scalar bounded draws, bounded fills at aligned and unaligned
-  starts, normal pairs in `Double` and `Float`, exponentials. Also tandem-cuda's bounded fills.
+  starts, normal pairs in `Double` and `Float`, exponentials. tandem-cuda's bounded, normal and
+  exponential fills, exact.
 - The FNV-1a hashes of tandem-c's `test_normal_bits.c` and `test_exponential_bits.c`.
-- Bounded fills cut at any element, empty fills, position rules of draws, `split`, `fork` and
-  `purpose`, constructor bounds.
+- Bounded fills cut at any element, across the switch between Haskell and C and across the
+  pieces of a long C fill. Empty fills, position rules of draws, `split`, `fork` and `purpose`,
+  constructor bounds.
+- Four raw moments and the Kolmogorov-Smirnov distance of 10^7 normals and exponentials, in
+  `Double` and `Float`.
 - `RandomGen` and `SplitGen` against the draws, and the `random` stateful adapters.
 
-`tools/gen_fixtures.py` converts the specification's `vectors.json` and tandem-c's headers into
-`tests/Fixtures.hs`. `cabal run -f tools tandem-dump -- normals` writes the bytes of tandem-c's
+`tools/gen_fixtures.py` converts the specification's `vectors.json`, tandem-c's headers and
+tandem-cuda's headers into `tests/Fixtures.hs`. CI checks the vendored C, the dumps and the
+fixtures against the commits pinned in `.github/workflows/ci.yml`. `cabal run -f tools tandem-dump -- normals` writes the bytes of tandem-c's
 `tools/dump_normals.c`, with SHA-256
 `cfae418807a7d5f91ecd3e42c33a00943690c6e4b888ee39206738783efe9ded`.
 
@@ -126,18 +137,19 @@ exponentials. `mwc` is `mwc-random` 0.15 with `uniformVector`, `uniformR`, `stan
 
 | | Tandem | StdGen | mwc |
 |---|---|---|---|
-| fill `Word32` | 1.38 | 9.75 | 4.65 |
-| fill `Double` | 2.93 | 8.15 | 7.15 |
-| fill bounded, range 1000 | 2.17 | 3.60 | 4.53 |
-| fill normal `Double` | 6.53 | | 13.7 |
-| fill exponential `Double` | 5.91 | | 12.1 |
+| fill `Word32` | 0.21 | 9.11 | 4.51 |
+| fill `Double` | 0.49 | 7.84 | 7.03 |
+| fill bounded, range 1000 | 0.51 | 3.50 | 4.39 |
+| fill normal `Double` | 1.55 | | 13.5 |
+| fill exponential `Double` | 1.29 | | 11.9 |
 | scalar `Word64` | 6.16 | 0.77 | 6.38 |
 | scalar `Double` | 6.28 | 7.29 | 7.13 |
 | scalar normal `Double` | 19.7 | | 13.3 |
 
-The fills run the eight lanes of a row as unboxed scalar code, about 2.7 GiB/s for `Word32`.
-GHC's native code generator does not vectorize them. A scalar draw is a pure function of the
-generator and returns a new one, so it costs a record and, every row, a new row cache.
+These fills run in the vendored tandem-c, about 17 GiB/s for `Word32` against 20.4 GiB/s for
+tandem-c itself. The Haskell fills reach 2.7 GiB/s, as GHC's native code generator does not
+vectorize them. A scalar draw is a pure function of the generator and returns a new one, so
+every row costs a new row cache.
 
 ## AI assistance
 

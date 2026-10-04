@@ -20,7 +20,13 @@ extra-doc-files:
   NOTICE
   README.md
 
-extra-source-files: tests/data/*.bin
+extra-source-files:
+  cbits/tandem.h
+  tests/data/*.bin
+
+source-repository head
+  type:     git
+  location: https://github.com/tandem-rng/tandem-hs
 
 flag fma
   description:
@@ -50,6 +56,15 @@ library
     System.Random.Tandem.Derived
     System.Random.Tandem.Generator
     System.Random.Tandem.Math
+    System.Random.Tandem.Native
+
+  -- tandem.c includes itself for its AVX2 copy, so it must keep its name.
+  c-sources:
+    cbits/hs_tandem.c
+    cbits/tandem.c
+
+  include-dirs:    cbits
+  cc-options:      -std=c11 -ffp-contract=off
 
   build-depends:
     , base       >=4.20 && <5
