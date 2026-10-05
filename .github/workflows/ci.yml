@@ -75,3 +75,36 @@ jobs:
       - name: Tests with -mfma
         if: runner.os == 'Linux'
         run: cabal test -f fma --test-show-details=direct
+
+  llvm:
+    name: ${{ matrix.os }} GHC 9.14 with LLVM 21
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: haskell-actions/setup@v2
+        id: setup
+        with:
+          ghc-version: '9.14'
+          cabal-version: latest
+      - name: Install LLVM 21
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            wget -q https://apt.llvm.org/llvm.sh
+            sudo bash llvm.sh 21
+            echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
+          else
+            brew install llvm@21
+            echo "$(brew --prefix llvm@21)/bin" >> "$GITHUB_PATH"
+          fi
+      - run: cabal configure -f llvm --enable-tests --enable-benchmarks && cabal build all --dry-run
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-llvm-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-llvm-
+      - run: cabal build all
+      - run: cabal test --test-show-details=direct

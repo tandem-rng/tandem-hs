@@ -39,4 +39,5 @@ tandem-c's `tools/dump_normals.c`, with SHA-256
 CI checks the vendored C, the dumps, the fixtures and the ziggurat tables against the commits
 pinned in `.github/workflows/ci.yml`. The tests run with GHC 9.14 on Ubuntu and macOS and with
 GHC 9.12 on Ubuntu. CI also checks that the dumps hash as tandem-c's, that fused multiply-adds lower to
-instructions, and the tests with `-mfma`.
+instructions, and the tests with `-mfma`. A second job runs the tests with GHC 9.14 and `-f llvm`
+on LLVM 21, on Ubuntu and macOS.

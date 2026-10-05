@@ -42,9 +42,23 @@ flag tools
   default:     False
   manual:      True
 
+-- Off by default, as cabal cannot tell whether LLVM is installed.
+flag llvm
+  description:
+    Compile with GHC's LLVM backend. Needs LLVM's opt and llc on the PATH. Scalar
+    draws and fills below 1024 values, which run in Haskell, are 1.2 to 1.7 times
+    faster. A program that inlines the draws gets that speed when it is also
+    compiled with -fllvm.
+
+  default:     False
+  manual:      True
+
 common common
   default-language: GHC2024
   ghc-options:      -Wall
+
+  if flag(llvm)
+    ghc-options: -fllvm
 
 library
   import:          common

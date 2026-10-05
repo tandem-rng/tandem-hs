@@ -43,6 +43,10 @@ The native code generator lowers the primops without `-fllvm`.
   `fma`, which gives the same bits more slowly. The package flag `fma` adds `-mfma`, for CPUs
   with FMA3: `cabal build -f fma`.
 
+The package flag `llvm` compiles through GHC's LLVM backend instead: `cabal build -f llvm`, with
+LLVM's `opt` and `llc` on the PATH. LLVM lowers the same primops to fused instructions and
+contracts nothing else, as GHC sets no fast-math flags, so the bits do not change.
+
 `tools/fma-asm.sh [-mfma]` counts both in the generated assembly. CI checks both cases. The
 vendored `tandem.c` builds with `-ffp-contract=off` and picks its AVX2 and FMA copy at run time on
 x86-64.
