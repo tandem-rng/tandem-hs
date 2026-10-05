@@ -24,7 +24,7 @@ main =
   defaultMain $
     testGroup
       "tandem"
-      [specVectors, streamDumps, cache, crossFixtures, bitHashes, derivedFills, distributions, positions, randomGen]
+      [specVectors, streamDumps, cache, cacheMixed, crossFixtures, bitHashes, derivedFills, distributions, positions, randomGen]
 
 -- | @n@ scalar draws.
 draws :: Int -> (Tandem -> (a, Tandem)) -> Tandem -> ([a], Tandem)
@@ -169,6 +169,19 @@ cache = testCase "random access at every chunk length" $
       fst (nextWord32 (seek p g')) @?= wordRef vectorKey kk p
   where
     complement31 = maxBound - 31
+
+-- | Scalar draws, which cache several rows, between short fills, which copy the cached rows and
+-- step on from them, against the definition at every chunk length.
+cacheMixed :: TestTree
+cacheMixed = testCase "scalar draws and short fills share the cache at every chunk length" $
+  forM_ [1, 2, 8, 32, 65536] $ \kk ->
+    forM_ [0, 5 * 1024 + 32, 31 * 1024 - 64] $ \p0 -> do
+      let (a, g1) = nextWord32 (fromKey vectorKey p0 kk)
+          (v, g2) = fillWord32 300 g1
+          (b, g3) = nextWord32 g2
+          (w, g4) = fillWord32 700 g3
+          (c, _) = nextWord32 g4
+      a : U.toList v ++ b : U.toList w ++ [c] @?= [wordRef vectorKey kk (p0 + 32 * i) | i <- [0 .. 1002]]
 
 -- Cross-check fixtures --------------------------------------------------------------------
 
