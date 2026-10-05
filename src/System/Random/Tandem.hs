@@ -96,7 +96,8 @@ import System.Random.Tandem.Generator
 
 pureFill :: MU.Unbox a => (forall s. MU.MVector s a -> Tandem -> ST s Tandem) -> Int -> Tandem -> (U.Vector a, Tandem)
 pureFill fill n g = runST $ do
-  v <- MU.new n
+  -- Every fill writes all of its elements, so zeroing the vector first would be a wasted pass.
+  v <- MU.unsafeNew n
   g' <- fill v g
   u <- U.unsafeFreeze v
   pure (u, g')
