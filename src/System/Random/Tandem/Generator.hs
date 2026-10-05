@@ -346,10 +346,12 @@ lemire mul next n = go
 -- draws the next 32 bits of the stream. For @n = 0@ the result is 0 after one draw.
 nextBelow32 :: Word32 -> Tandem -> (Word32, Tandem)
 nextBelow32 = lemire mul32 nextWord32
+{-# INLINE nextBelow32 #-}
 
 -- | 'nextBelow32' on 64-bit draws.
 nextBelow64 :: Word64 -> Tandem -> (Word64, Tandem)
 nextBelow64 = lemire mul64 nextWord64
+{-# INLINE nextBelow64 #-}
 
 -- | The draws of the widths the methods name. Bounded draws take Lemire's method of Appendix A,
 -- with the draw width from the range, so @genWord64R@ with a range up to @2^32@ consumes 32-bit

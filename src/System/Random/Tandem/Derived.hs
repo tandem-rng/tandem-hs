@@ -170,6 +170,9 @@ nextNormal g =
   let !(r, g') = nextWord64 g
       !z = ziggurat (fallbackOf purposeNormal64 g) (align (position g) 64 `shiftR` 6) r
    in (z, g')
+-- Inlined as the uniform draws are, so that a loop keeps the generator's fields in registers
+-- instead of passing nine words through a call per draw.
+{-# INLINE nextNormal #-}
 
 -- | Fill with standard normals by the ziggurat. Element @i@ comes from draw @i@ of the 64-bit
 -- fill, and a miss continues on @split g@ of @purpose 0x4e524d3634@ of the fill's key at
@@ -212,6 +215,7 @@ nextNormalFloat g = let !((c, _), g') = nextNormalPairFloat g in (c, g')
 -- | A standard exponential @-ln(1 - u)@ from one 'Double' draw.
 nextExponential :: Tandem -> (Double, Tandem)
 nextExponential g = let !(u, g') = nextDouble g; !e = 0.5 * neg2Log (1 - u) in (e, g')
+{-# INLINE nextExponential #-}
 
 -- | 'nextExponential' in single precision from one 'Float' draw.
 nextExponentialFloat :: Tandem -> (Float, Tandem)
