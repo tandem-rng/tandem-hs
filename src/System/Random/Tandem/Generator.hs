@@ -463,11 +463,14 @@ fillRows w conv putBlock (P.MVector off n mba) g0 = do
 -- @2^64@.
 start :: Int -> Int -> Word64 -> Word64
 start w n p
-  | a + toInteger w * toInteger n >= 2 ^ (64 :: Int) =
+  -- The aligned start wraps to 0 when it would reach 2^64. A count of 2^57 or more elements
+  -- cannot be allocated, and keeps the product below 2^63.
+  | a < p || n >= 2 ^ (57 :: Int) || (a /= 0 && fromIntegral w * fromIntegral n >= negate a) =
       error "System.Random.Tandem: fill ends beyond bit position 2^64"
-  | otherwise = fromInteger a
+  | otherwise = a
   where
-    a = (toInteger p + toInteger w - 1) `quot` toInteger w * toInteger w
+    a = align p w
+{-# INLINE start #-}
 
 put32 :: PutBlock s
 put32 mba i a b c d = do
