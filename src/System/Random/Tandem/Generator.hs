@@ -39,7 +39,7 @@ module System.Random.Tandem.Generator
 import Control.Monad.Primitive (PrimMonad, PrimState, stToPrim)
 import Control.Monad.ST (ST, runST)
 import Control.Monad.ST.Unsafe (unsafeIOToST)
-import Data.Bits (complement, countTrailingZeros, popCount, shiftL, shiftR, unsafeShiftR, (.&.), (.|.))
+import Data.Bits (complement, countTrailingZeros, popCount, shiftL, shiftR, unsafeShiftL, unsafeShiftR, (.&.), (.|.))
 import Data.Primitive.ByteArray (MutableByteArray (..), writeByteArray)
 import Data.Primitive.PrimArray
   ( MutablePrimArray
@@ -55,13 +55,16 @@ import Data.Vector.Primitive.Mutable qualified as P
 import Data.Vector.Unboxed.Base qualified as U
 import Data.Word (Word32, Word64)
 import Foreign.C.Types (CSize)
-import GHC.Exts (MutableByteArray#, timesWord2#, word64ToWord#, wordToWord64#)
+import GHC.Exts (Int (I#), MutableByteArray#, timesWord2#, word64ToWord#, wordToWord64#, writeWord8ArrayAsWord64#)
+import GHC.ByteOrder (ByteOrder (LittleEndian), targetByteOrder)
+import GHC.ST (ST (..))
 import GHC.Float (int2Double, int2Float)
 import GHC.Word (Word64 (W64#))
 import System.Random qualified as R
 
 import System.Random.Tandem.Core
 import System.Random.Tandem.Native
+import System.Random.Tandem.Rounds (Lane, keyedFW, stepW)
 
 -- | A Tandem8x32 generator. It is its transport form, the key, the bit position and the chunk
 -- length @K@, plus a cache of the current 1024-bit row. Equality and 'Show' cover the transport
@@ -161,14 +164,12 @@ fork n g
 
 -- Rows ------------------------------------------------------------------------------------
 
-type Lane r = Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> r
-
 -- Strict in the words, so that the loop keeps them unboxed until it calls @k@.
 stepTimes :: Word64 -> Lane r -> Lane r
 stepTimes n0 k = go n0
   where
     go 0 !a !b !c !d !e !f !g !h = k a b c d e f g h
-    go n !a !b !c !d !e !f !g !h = stepWith (go (n - 1)) a b c d e f g h
+    go n !a !b !c !d !e !f !g !h = stepW (go (n - 1)) a b c d e f g h
 {-# INLINE stepTimes #-}
 
 -- | The state of lane @l@ at row @row@: stepped forward from the cache when it holds an earlier
@@ -178,26 +179,27 @@ withLane g row l k
   | forward row g =
       stepTimes (row - tRow g) k (c 0) (c 1) (c 2) (c 3) (c 4) (c 5) (c 6) (c 7)
   | otherwise =
-      keyedFWith
-        (stepTimes ((row .&. fromIntegral (tK g - 1)) + 1) k)
-        (tKey g)
-        (8 * (row `unsafeShiftR` countTrailingZeros (tK g)) + fromIntegral l)
-        domainStream
-        auxStream
+      let Quad k0 k1 k2 k3 = tKey g
+       in keyedFW
+            (stepTimes ((row .&. fromIntegral (tK g - 1)) + 1) k)
+            k0 k1 k2 k3
+            (8 * (row `unsafeShiftR` countTrailingZeros (tK g)) + fromIntegral l)
+            domainStream
+            auxStream
   where
-    c w = indexPrimArray (tCache g) (8 * l + w)
+    c w = fromIntegral (indexPrimArray (tCache g) (8 * l + w))
 {-# INLINE withLane #-}
 
 saveLane :: MutablePrimArray s Word32 -> Int -> Lane (ST s ())
 saveLane m l a b c d e f g h = do
-  writePrimArray m (8 * l) a
-  writePrimArray m (8 * l + 1) b
-  writePrimArray m (8 * l + 2) c
-  writePrimArray m (8 * l + 3) d
-  writePrimArray m (8 * l + 4) e
-  writePrimArray m (8 * l + 5) f
-  writePrimArray m (8 * l + 6) g
-  writePrimArray m (8 * l + 7) h
+  writePrimArray m (8 * l) (fromIntegral a)
+  writePrimArray m (8 * l + 1) (fromIntegral b)
+  writePrimArray m (8 * l + 2) (fromIntegral c)
+  writePrimArray m (8 * l + 3) (fromIntegral d)
+  writePrimArray m (8 * l + 4) (fromIntegral e)
+  writePrimArray m (8 * l + 5) (fromIntegral f)
+  writePrimArray m (8 * l + 6) (fromIntegral g)
+  writePrimArray m (8 * l + 7) (fromIntegral h)
 {-# INLINE saveLane #-}
 
 -- | Produce rows @[row0, row0 + nrows)@, @nrows > 0@, through @emit i lane o0 o1 o2 o3@ with
@@ -207,7 +209,7 @@ runRows
   :: Tandem
   -> Word64
   -> Int
-  -> (Int -> Int -> Word32 -> Word32 -> Word32 -> Word32 -> ST s ())
+  -> (Int -> Int -> Word -> Word -> Word -> Word -> ST s ())
   -> ST s Tandem
 runRows g row0 nrows emit = do
   m <- newPrimArray 64
@@ -226,7 +228,7 @@ runRows g row0 nrows emit = do
           go !r !a !b !c !d !e !f !gg !h = do
             emit (done + r) l a b c d
             if r + 1 < run
-              then stepWith (go (r + 1)) a b c d e f gg h
+              then stepW (go (r + 1)) a b c d e f gg h
               else saveLane m l a b c d e f gg h
   runs row0 0
   cache <- unsafeFreezePrimArray m
@@ -388,8 +390,9 @@ toFloat raw = int2Float (fromIntegral (raw `shiftR` 8)) * 0x1p-24
 
 -- Fills -----------------------------------------------------------------------------------
 
--- | Writes the 128 bits of one block, four words, as elements from index @i@.
-type PutBlock s = MutableByteArray s -> Int -> Word32 -> Word32 -> Word32 -> Word32 -> ST s ()
+-- | Writes the 128 bits of one block, four 32-bit words held in 'Word's, as elements from index
+-- @i@.
+type PutBlock s = MutableByteArray s -> Int -> Word -> Word -> Word -> Word -> ST s ()
 
 -- | Fills of at least this many elements run in the vendored tandem-c, whose SIMD row loops are
 -- several times faster than GHC's scalar code. Shorter fills keep the cached row, which saves
@@ -474,16 +477,27 @@ start w n p
     a = align p w
 {-# INLINE start #-}
 
+-- Two 64-bit stores in place of four 32-bit ones on a little-endian target, where they lay the
+-- words out in order. They are unaligned, as a slice of a vector can start at an odd element.
 put32 :: PutBlock s
-put32 mba i a b c d = do
-  writeByteArray mba i a
-  writeByteArray mba (i + 1) b
-  writeByteArray mba (i + 2) c
-  writeByteArray mba (i + 3) d
+put32 mba i a b c d
+  | targetByteOrder == LittleEndian = do
+      writeUnaligned64 mba (4 * i) (pair64 a b)
+      writeUnaligned64 mba (4 * i + 8) (pair64 c d)
+  | otherwise = do
+      writeByteArray mba i (fromIntegral a :: Word32)
+      writeByteArray mba (i + 1) (fromIntegral b :: Word32)
+      writeByteArray mba (i + 2) (fromIntegral c :: Word32)
+      writeByteArray mba (i + 3) (fromIntegral d :: Word32)
 {-# INLINE put32 #-}
 
-pair64 :: Word32 -> Word32 -> Word64
-pair64 a b = fromIntegral a .|. (fromIntegral b `shiftL` 32)
+-- | A 64-bit store at byte offset @o@, which need not be a multiple of 8.
+writeUnaligned64 :: MutableByteArray s -> Int -> Word64 -> ST s ()
+writeUnaligned64 (MutableByteArray m) (I# o) (W64# x) = ST (\s -> (# writeWord8ArrayAsWord64# m o x s, () #))
+{-# INLINE writeUnaligned64 #-}
+
+pair64 :: Word -> Word -> Word64
+pair64 a b = fromIntegral (a .|. (b `unsafeShiftL` 32))
 {-# INLINE pair64 #-}
 
 -- | Fill a vector with 32-bit draws.
@@ -511,7 +525,9 @@ fillFloatM :: PrimMonad m => U.MVector (PrimState m) Float -> Tandem -> m Tandem
 fillFloatM (U.MV_Float v) g = stToPrim (fillPrim 32 (toFloat . fromIntegral) put cFillF32 v g)
   where
     put mba i a b c d = do
-      writeByteArray mba i (toFloat a)
-      writeByteArray mba (i + 1) (toFloat b)
-      writeByteArray mba (i + 2) (toFloat c)
-      writeByteArray mba (i + 3) (toFloat d)
+      writeByteArray mba i (toFloatW a)
+      writeByteArray mba (i + 1) (toFloatW b)
+      writeByteArray mba (i + 2) (toFloatW c)
+      writeByteArray mba (i + 3) (toFloatW d)
+    -- 'toFloat' on a word below 2^32 held in a 'Word', without narrowing it first.
+    toFloatW x = int2Float (fromIntegral (x `unsafeShiftR` 8)) * 0x1p-24
