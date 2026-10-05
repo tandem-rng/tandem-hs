@@ -1,8 +1,12 @@
--- | Fills of 2^22 values and loops of 2^20 scalar draws, against random's StdGen (SplitMix) and
--- mwc-random.
+{-# LANGUAGE RankNTypes #-}
+
+-- | Fills of 2^22 values, short fills that stay in Haskell, and loops of 2^20 scalar draws, against
+-- random's StdGen (SplitMix) and mwc-random.
 module Main (main) where
 
+import Control.Monad.ST (ST, runST)
 import Data.Vector.Unboxed qualified as U
+import Data.Vector.Unboxed.Mutable qualified as MU
 import Data.Word (Word32, Word64)
 import System.Random qualified as R
 import System.Random.Stateful qualified as RS
@@ -22,6 +26,14 @@ loop next k = go k 0
     go 0 !acc _ = acc
     go i !acc g = let !(x, g') = next g in go (i - 1) (acc + x) g'
 
+-- | 2^13 fills of 2^9 values into one vector, below the size where fills call tandem-c.
+short :: forall a. U.Unbox a => (forall s. MU.MVector s a -> T.Tandem -> ST s T.Tandem) -> T.Tandem -> Word64
+short f g0 = runST (MU.unsafeNew 512 >>= \v -> fills v (8192 :: Int) g0)
+  where
+    fills :: MU.MVector s a -> Int -> T.Tandem -> ST s Word64
+    fills _ 0 g = pure (T.position g)
+    fills v i g = f v g >>= fills v (i - 1)
+
 loopIO :: Num a => IO a -> Int -> IO a
 loopIO next k = go k 0
   where
@@ -38,6 +50,12 @@ main = do
       unfold f = bench "StdGen" (whnf (U.unfoldrExactN n f) s)
   defaultMain
     [ bgroup
+          "fill 2^9, 2^13 times"
+          [ bench "u32" (whnf (short T.fillWord32M) t)
+          , bench "f64" (whnf (short T.fillDoubleM) t)
+          , bench "normal f64" (whnf (short T.fillNormalM) t)
+          ]
+    , bgroup
           "fill 2^22"
           [ bgroup
               "u32"
