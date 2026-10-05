@@ -16,11 +16,11 @@ exponentials. `mwc` is `mwc-random` 0.15 with `uniformVector`, `uniformR`, `stan
 | fill `Word32` | 0.21 | 9.11 | 4.51 |
 | fill `Double` | 0.49 | 7.84 | 7.03 |
 | fill bounded, range 1000 | 0.51 | 3.50 | 4.39 |
-| fill normal `Double` | 1.55 | | 13.5 |
+| fill normal `Double` | 0.97 | | 13.4 |
 | fill exponential `Double` | 1.29 | | 11.9 |
 | scalar `Word64` | 6.16 | 0.77 | 6.38 |
 | scalar `Double` | 6.28 | 7.29 | 7.13 |
-| scalar normal `Double` | 19.7 | | 13.3 |
+| scalar normal `Double` | 12.4 | | 13.3 |
 
 These fills run in the vendored tandem-c, about 17 GiB/s for `Word32` against 20.4 GiB/s for
 tandem-c itself. The Haskell fills reach 2.7 GiB/s, as GHC's native code generator does not
