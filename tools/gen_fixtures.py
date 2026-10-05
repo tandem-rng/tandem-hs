@@ -191,11 +191,14 @@ for name, hs, ty in (("CROSS_BELOW32_AT", "cudaBelow32At", "Word32"), ("CROSS_BE
 
 # Normals and exponentials ----------------------------------------------------------------
 normal = header("cross_normal.h")
-emit("-- | Flattened normal pairs from seed 42 at position 1, and the position after.")
-emit("normalPairs :: ([Word64], Word64)")
-emit(f"normalPairs = ({hs_list(initializer(normal, 'CROSS_NORMAL'), lambda x: hex64(f64_bits(x)))}, "
-     f"{scalar(normal, 'CROSS_NORMAL_END_POS')})")
+emit("-- | Ziggurat normal fills of 64 from the key of seed 42: (start position, values, position after).")
+emit("normals :: [(Word64, [Word64], Word64)]")
+emit("normals =")
+emit("  [ " + "\n  , ".join(
+    f"({integer(p)}, {hs_list(w, lambda x: hex64(f64_bits(x)))}, {integer(e)})"
+    for p, w, e in initializer(normal, "CROSS_NORMAL")) + "\n  ]")
 emit("")
+emit("-- | Flattened Box-Muller pairs from seed 42 at position 1, and the position after.")
 emit("normalPairsFloat :: ([Word32], Word64)")
 emit(f"normalPairsFloat = ({hs_list(initializer(normal, 'CROSS_NORMALF'), lambda x: hex32(f32_bits(x)))}, "
      f"{scalar(normal, 'CROSS_NORMALF_END_POS')})")

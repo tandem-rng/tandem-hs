@@ -15,15 +15,15 @@ main = do
   args <- getArgs
   hSetBinaryMode stdout True
   case args of
-    ["normals"] -> dump (2 * 1000000 - 1) fillNormal fillNormalFloat
-    ["exponentials"] -> dump 1000000 fillExponential fillExponentialFloat
+    ["normals"] -> dump (\g -> bytes doubleLE (fst (fillNormal 1000000 g)))
+    ["exponentials"] ->
+      dump $ \g ->
+        let (d, g') = fillExponential 1000000 g
+         in bytes doubleLE d <> bytes floatLE (fst (fillExponentialFloat 1000000 g'))
     _ -> fail "usage: tandem-dump normals|exponentials"
   where
-    dump n f64 f32 = mapM_ (hPutBuilder stdout . fills n f64 f32) [0, 1, 77, 12345, 2 ^ (30 :: Int)]
-    fills n f64 f32 p =
-      let (d, g) = f64 n (seek p (seed (2026 + 7 * 2 ^ (64 :: Int))))
-          (f, _) = f32 n g
-       in bytes doubleLE d <> bytes floatLE f
+    dump fills = mapM_ (\p -> hPutBuilder stdout (fills (seek p (seed (2026 + 7 * 2 ^ (64 :: Int))))))
+      [0, 1, 77, 12345, 2 ^ (30 :: Int)]
 
 bytes :: U.Unbox a => (a -> Builder) -> U.Vector a -> Builder
 bytes put = U.foldr (\x b -> put x <> b) mempty

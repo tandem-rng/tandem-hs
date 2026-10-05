@@ -5,8 +5,8 @@ on:
   pull_request:
 
 env:
-  TANDEM_C: 4e9a69f42a3721adfd2eb87c79b6c26b92a2e62a
-  TANDEM_CUDA: 5ceb466db1ea353889c1263a9d7ec36d7781a11c
+  TANDEM_C: 121db5902d6136c7e5258970c0160121af3ab1d0
+  TANDEM_CUDA: 76eddaeb775f5ca3e5f4518dcb6ca0f4cd2bd907
   TANDEM_SPEC: ac4c4f9a690772184620a777f252669fe82bd1a5
 
 jobs:
@@ -22,7 +22,7 @@ jobs:
             git -C "../${r%%:*}" fetch -q --depth 1 "https://github.com/tandem-rng/${r%%:*}" "${r#*:}"
             git -C "../${r%%:*}" checkout -q FETCH_HEAD
           done
-      - run: diff ../tandem-c/tandem.c cbits/tandem.c && diff ../tandem-c/tandem.h cbits/tandem.h
+      - run: for f in tandem.c tandem.h tandem_normal_tables.h; do diff "../tandem-c/$f" "cbits/$f"; done
       - run: for f in tests/data/*.bin; do cmp "$f" "../tandem-c/tests/data/$(basename "$f")"; done
       - run: |
           python3 tools/gen_fixtures.py ../spec/vectors.json ../tandem-c/tests ../tandem-cuda/tests > tests/Fixtures.hs
@@ -60,7 +60,7 @@ jobs:
       - name: Dumps hash as tandem-c's
         run: |
           dump=$(cabal list-bin -f tools exe:tandem-dump)
-          test "$($dump normals | shasum -a 256 | cut -d' ' -f1)" = cfae418807a7d5f91ecd3e42c33a00943690c6e4b888ee39206738783efe9ded
+          test "$($dump normals | shasum -a 256 | cut -d' ' -f1)" = 700ec4d2f4d6b82aaa56c6eff18a4e5919585fdbd093988773383d580ea610d1
           test "$($dump exponentials | shasum -a 256 | cut -d' ' -f1)" = 5c035a4ef1368231d25a9c2f9201be2df3224e28a14549a50625d0db3770ef4e
       - name: Fused multiply-adds lower to instructions
         run: |

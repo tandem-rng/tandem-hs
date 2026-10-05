@@ -47,7 +47,6 @@ module System.Random.Tandem
   , nextBelow64
   , nextNormal
   , nextNormalFloat
-  , nextNormalPair
   , nextNormalPairFloat
   , nextExponential
   , nextExponentialFloat

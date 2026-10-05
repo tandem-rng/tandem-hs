@@ -92,6 +92,16 @@ leWords n bs
   | otherwise =
       foldr (\b acc -> acc `shiftL` 8 + fromIntegral b) 0 (B.unpack (B.take n bs)) : leWords n (B.drop n bs)
 
+-- | One vector from consecutive in-place fills of the given lengths.
+fillCuts :: MU.Unbox a => [Int] -> (forall s. MU.MVector s a -> Tandem -> ST s Tandem) -> Tandem -> (U.Vector a, Tandem)
+fillCuts cuts fillM g = runST $ do
+  m <- MU.new (sum cuts)
+  let go _ [] h = pure h
+      go i (c : cs) h = fillM (MU.slice i c m) h >>= go (i + c) cs
+  h <- go 0 cuts g
+  u <- U.unsafeFreeze m
+  pure (u, h)
+
 -- | A dump against the fill, against as many scalar draws, and against the same fill cut into
 -- pieces in place, with equal end positions.
 dump
@@ -110,13 +120,7 @@ dump file g bytes fill fillM next view raw = testCase file $ do
   let n = length want
       (v, g1) = fill n g
       (xs, g2) = draws n next g
-      (cut, g3) = runST $ do
-        m <- MU.new n
-        let go _ [] h = pure h
-            go i (c : cs) h = fillM (MU.slice i c m) h >>= go (i + c) cs
-        h <- go 0 (pieces n) g
-        u <- U.freeze m
-        pure (u, h)
+      (cut, g3) = fillCuts (pieces n) fillM g
   map view (U.toList v) @?= want
   map view xs @?= want
   map view (U.toList cut) @?= want
@@ -197,10 +201,21 @@ crossFixtures =
         forM_ cudaBelow64 $ \(n, _, want) -> U.toList (fst (fillBelow64 n 64 (fromKey cudaKey 0 32))) @?= want
         forM_ cudaBelow32At $ \(p, n, _, want) -> U.toList (fst (fillBelow32 n 64 (fromKey cudaKey p 32))) @?= want
         forM_ cudaBelow64At $ \(p, n, _, want) -> U.toList (fst (fillBelow64 n 64 (fromKey cudaKey p 32))) @?= want
-    , testCase "normal pairs" $ do
-        let (ps, g) = draws 64 nextNormalPair start
-            (fs, h) = draws 64 nextNormalPairFloat start
-        (concatMap (\(c, s) -> map castDoubleToWord64 [c, s]) ps, position g) @?= normalPairs
+    , testCase "ziggurat normals in Haskell and C, cut at every element" $
+        forM_ normals $ \(p, want, end) -> do
+          let g = seek p (seed 42)
+              (v, h) = fillNormal 64 g
+              (xs, h') = draws 64 nextNormal g
+              -- 1024 elements take the C fill.
+              (w, hc) = fillNormal 1024 g
+          (bits64 v, position h) @?= (want, end)
+          (map castDoubleToWord64 xs, position h') @?= (want, end)
+          (take 64 (bits64 w), position hc) @?= (want, end + 64 * 960)
+          forM_ [1 .. 63] $ \c -> do
+            let (u, hu) = fillCuts [c, 64 - c] fillNormalM g
+            (bits64 u, position hu) @?= (want, end)
+    , testCase "Float normal pairs" $ do
+        let (fs, h) = draws 64 nextNormalPairFloat start
         (concatMap (\(c, s) -> map castFloatToWord32 [c, s]) fs, position h) @?= normalPairsFloat
     , testCase "tandem-cuda normal and exponential fills" $ do
         let at p = fromKey cudaKey p 32
@@ -235,15 +250,34 @@ hashDoubles = U.foldl' (\h x -> fnv h 8 (castDoubleToWord64 x))
 hashFloats :: Word64 -> U.Vector Float -> Word64
 hashFloats = U.foldl' (\h x -> fnv h 4 (fromIntegral (castFloatToWord32 x)))
 
--- | The hashes of tandem-c's tests/test_normal_bits.c and tests/test_exponential_bits.c.
+-- | The hashes of tandem-c's tests/test_normal_bits.c and tests/test_exponential_bits.c. The
+-- 'Double' normals hash in three ways: the C fill, the Haskell scalar draws, and the Haskell
+-- fill in pieces below the C threshold.
 bitHashes :: TestTree
 bitHashes =
   testGroup
     "bit hashes"
-    [ testCase "normals" $ hashOf (2 * 1000000 - 1) fillNormal fillNormalFloat @?= 0x9414e1315e2653be
+    [ testCase "normals" $ do
+        let gs = [seek p (seed2 2026 7) | p <- starts]
+        normals3 1000000 gs @?= three 0xa61cfa844c85f7c1
+        foldl' (\h g -> hashFloats h (fst (fillNormalFloat (2 * 1000000 - 1) g))) basis gs @?= 0xaa1ea656ce73a4fb
+    , testCase "normals against the Python reference" $
+        forM_ [(0, 0x0c4059ed409d578d, 12800000), (2373, 0x30ce40c86b295193, 12802432)] $ \(p, want, end) -> do
+          let g = fromKey vectorKey p 32
+          normals3 200000 [g] @?= three want
+          position (snd (fillNormal 200000 g)) @?= end
+          position (snd (fillCuts (replicate 200 1000) fillNormalM g)) @?= end
     , testCase "exponentials" $ hashOf 1000000 fillExponential fillExponentialFloat @?= 0x47f8f98297d94ee2
     ]
   where
+    starts = [0, 1, 77, 12345, 2 ^ (30 :: Int)]
+    basis = 0xcbf29ce484222325
+    three h = (h, h, h)
+    normals3 n gs =
+      let viaC = foldl' (\h g -> hashDoubles h (fst (fillNormal n g))) basis gs
+          scalar = foldl' (\h g -> hashDraws n nextNormal h g) basis gs
+          pieces = foldl' (\h g -> hashDoubles h (fst (fillCuts (replicate (n `div` 1000) 1000) fillNormalM g))) basis gs
+       in (viaC, scalar, pieces)
     hashOf n f64 f32 =
       foldl'
         ( \h p ->
@@ -251,8 +285,15 @@ bitHashes =
                 (f, _) = f32 n g
              in hashFloats (hashDoubles h d) f
         )
-        0xcbf29ce484222325
-        [0, 1, 77, 12345, 2 ^ (30 :: Int)]
+        basis
+        starts
+
+-- | 'hashDoubles' of @n@ scalar draws, without a list of them.
+hashDraws :: Int -> (Tandem -> (Double, Tandem)) -> Word64 -> Tandem -> Word64
+hashDraws n next = go n
+  where
+    go 0 !h _ = h
+    go k !h g = let !(x, g') = next g in go (k - 1) (fnv h 8 (castDoubleToWord64 x)) g'
 
 -- Derived fills ---------------------------------------------------------------------------
 
@@ -298,19 +339,23 @@ derivedFills =
             (a, g1) = nextBelow32 0 g
             (b, g2) = nextBelow64 0 g1
         (a, position g1, b, position g2) @?= (0, 32, 0, 128)
-    , testCase "normal fills are the flattened pairs" $
+    , testCase "normal fills cut anywhere equal the whole" $
+        forM_ [1, 12345, 100000] $ \p -> forM_ [1, 7, 300, 1000, 2999] $ \c ->
+          cutEquals c fillNormalM (seek p (seed2 5 6))
+    , testCase "normal fills are the scalar draws" $
+        forM_ [1 .. 9] $ \n -> forM_ [0, 1, 77] $ \p -> forM_ [n, n + 8192] $ \m -> do
+          let g = seek p (seed 3)
+              (xs, h) = draws m nextNormal g
+              (v, g') = fillNormal m g
+          (U.toList v, position g') @?= (xs, position h)
+    , testCase "Float normal fills are the flattened pairs" $
         forM_ [0 .. 9] $ \n -> forM_ [0, 1, 77] $ \p -> forM_ [n, n + 8192] $ \m -> do
           let g = seek p (seed 3)
-              (ps, h) = draws ((m + 1) `div` 2) nextNormalPair g
               (fs, hf) = draws ((m + 1) `div` 2) nextNormalPairFloat g
-              (v, g') = fillNormal m g
               (vf, gf) = fillNormalFloat m g
-          U.toList v @?= take m (concatMap (\(c, s) -> [c, s]) ps)
           U.toList vf @?= take m (concatMap (\(c, s) -> [c, s]) fs)
-          (position g', position gf) @?= (position h, position hf)
-          when (m > 0) $ do
-            U.head v @?= fst (nextNormal g)
-            U.head vf @?= fst (nextNormalFloat g)
+          position gf @?= position hf
+          when (m > 0) $ U.head vf @?= fst (nextNormalFloat g)
     , testCase "exponential fills are the scalar draws" $
         forM_ [0, 1, 5, 4097] $ \n -> do
           let g = seek 77 (seed 3)
@@ -326,13 +371,7 @@ derivedFills =
       :: (MU.Unbox a, Eq a, Show a)
       => Int -> (forall s. MU.MVector s a -> Tandem -> ST s Tandem) -> Tandem -> IO ()
     cutEquals c fillM g = do
-      let run cuts = runST $ do
-            m <- MU.new 3000
-            let go _ [] h = pure h
-                go i (k : ks) h = fillM (MU.slice i k m) h >>= go (i + k) ks
-            h <- go 0 cuts g
-            u <- U.freeze m
-            pure (U.toList u, position h)
+      let run cuts = let (u, h) = fillCuts cuts fillM g in (U.toList u, position h)
       run [c, 3000 - c] @?= run [3000]
 
 -- Distributions ---------------------------------------------------------------------------
@@ -400,10 +439,10 @@ positions =
           let g = seek p (seed2 1 2)
               at = position . snd
           [ at (fillBelow32 10 0 g), at (fillBelow64 10 0 g), at (fillBelow 10 0 g)
-            , at (fillNormal 0 g), at (fillNormalFloat 0 g)
-            , at (fillExponential 0 g), at (fillExponentialFloat 0 g) ]
-            @?= replicate 7 p
-          position (snd (fillWord64 0 g)) @?= (p + 63) `div` 64 * 64
+            , at (fillNormalFloat 0 g), at (fillExponential 0 g), at (fillExponentialFloat 0 g) ]
+            @?= replicate 6 p
+          -- Appendix A: an empty Double normal fill follows section 5.
+          [at (fillWord64 0 g), at (fillNormal 0 g)] @?= replicate 2 ((p + 63) `div` 64 * 64)
           position (snd (fillFloat 0 g)) @?= (p + 31) `div` 32 * 32
     , testCase "draws align" $ do
         let g = seek 33 (seed 1)

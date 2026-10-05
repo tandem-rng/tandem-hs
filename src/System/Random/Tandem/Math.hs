@@ -6,19 +6,17 @@
 module System.Random.Tandem.Math
   ( neg2Log
   , neg2LogF
-  , boxMuller
   , boxMullerF
   ) where
 
 import Data.Bits (complement, shiftL, shiftR, xor, (.&.), (.|.))
-import Data.Word (Word32, Word64)
+import Data.Word (Word32)
 import GHC.Exts (Double (D#), Float (F#), fmaddDouble#, fmaddFloat#)
 import GHC.Float
   ( castDoubleToWord64
   , castFloatToWord32
   , castWord32ToFloat
   , castWord64ToDouble
-  , double2Int
   , float2Int
   , int2Double
   , int2Float
@@ -63,31 +61,8 @@ neg2LogF x =
 
 -- | The Box-Muller pair @(r cos 2 pi b, r sin 2 pi b)@ with @r = sqrt(-2 ln(1 - a))@. The angle
 -- needs no range reduction: @b - q/4@ for the nearest quarter turn @q@ is exact, the series on
--- @[-pi/4, pi/4]@ are short, and a quarter turn is a swap and a sign change on the bits.
-boxMuller :: Double -> Double -> (Double, Double)
-boxMuller a b =
-  let !r = sqrt (neg2Log (1 - a))
-      !q = double2Int (b * 4 + 0.5)
-      !th = fma (negate (int2Double q)) 0.25 b * 6.283185307179586
-      !w = th * th
-      !hs = fma w (fma w (fma w (fma w (fma w 1.5914650986900946e-10
-              (-2.5051097984389413e-08)) 2.755731600073921e-06) (-0.00019841269836630226))
-              0.008333333333330813) (-0.16666666666666669)
-      !hc = fma w (fma w (fma w (fma w (fma w 2.0665708703855164e-09
-              (-2.7555858522576447e-07)) 2.480158263811954e-05) (-0.0013888888882156126))
-              0.04166666666663108) (-0.4999999999999997)
-      !sb = castDoubleToWord64 (th * fma w hs 1)
-      !cb = castDoubleToWord64 (fma w hc 1)
-      -- Odd q swaps the two, bit 1 of q negates the sine, bit 1 of q + 1 negates the cosine.
-      !qu = fromIntegral q :: Word64
-      !sm = negate (qu .&. 1)
-      !xb = ((sb .&. sm) .|. (cb .&. complement sm)) `xor` (((qu + 1) `shiftL` 62) .&. signBit64)
-      !yb = ((cb .&. sm) .|. (sb .&. complement sm)) `xor` ((qu `shiftL` 62) .&. signBit64)
-   in (r * castWord64ToDouble xb, r * castWord64ToDouble yb)
-{-# INLINE boxMuller #-}
-
--- | 'boxMuller' in single precision, with @2 pi@ as a float pair so that the angle is good to the
--- last bit of the float.
+-- @[-pi/4, pi/4]@ are short, and a quarter turn is a swap and a sign change on the bits. @2 pi@
+-- is a float pair, so that the angle is good to the last bit of the float.
 boxMullerF :: Float -> Float -> (Float, Float)
 boxMullerF a b =
   let !r = sqrt (neg2LogF (1 - a))
@@ -99,15 +74,13 @@ boxMullerF a b =
       !hc = fmaf w (fmaf w (fmaf w 2.4463761e-05 (-0.0013887589)) 0.04166665) (-0.5)
       !sb = castFloatToWord32 (th * fmaf w hs 1)
       !cb = castFloatToWord32 (fmaf w hc 1)
+      -- Odd q swaps the two, bit 1 of q negates the sine, bit 1 of q + 1 negates the cosine.
       !qu = fromIntegral q :: Word32
       !sm = negate (qu .&. 1)
       !xb = ((sb .&. sm) .|. (cb .&. complement sm)) `xor` (((qu + 1) `shiftL` 30) .&. signBit32)
       !yb = ((cb .&. sm) .|. (sb .&. complement sm)) `xor` ((qu `shiftL` 30) .&. signBit32)
    in (r * castWord32ToFloat xb, r * castWord32ToFloat yb)
 {-# INLINE boxMullerF #-}
-
-signBit64 :: Word64
-signBit64 = 0x8000000000000000
 
 signBit32 :: Word32
 signBit32 = 0x80000000

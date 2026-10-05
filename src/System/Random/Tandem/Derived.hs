@@ -3,7 +3,6 @@
 module System.Random.Tandem.Derived
   ( nextNormal
   , nextNormalFloat
-  , nextNormalPair
   , nextNormalPairFloat
   , nextExponential
   , nextExponentialFloat
@@ -18,15 +17,19 @@ module System.Random.Tandem.Derived
 
 import Control.Monad.Primitive (PrimMonad, PrimState, stToPrim)
 import Control.Monad.ST (ST)
-import Data.Bits (shiftR)
+import Data.Bits (shiftR, testBit, (.&.))
+import Data.Primitive.ByteArray (readByteArray, writeByteArray)
+import Data.Primitive.PrimArray (indexPrimArray)
 import Data.Vector.Primitive.Mutable qualified as P
 import Data.Vector.Unboxed.Base qualified as U
 import Data.Vector.Unboxed.Mutable qualified as MU
 import Data.Word (Word32, Word64)
+import GHC.Float (int2Double)
 
 import System.Random.Tandem.Generator
 import System.Random.Tandem.Math
 import System.Random.Tandem.Native
+import System.Random.Tandem.ZigTables
 
 -- Bounded integers ------------------------------------------------------------------------
 
@@ -114,17 +117,86 @@ byRange n v g
       widen 0
       pure g'
 
--- Normals and exponentials ----------------------------------------------------------------
+-- Double normals: the ziggurat ------------------------------------------------------------
 
--- | Two standard normals by Box-Muller from two 'Double' draws, the cosine half first.
-nextNormalPair :: Tandem -> ((Double, Double), Tandem)
-nextNormalPair g0 =
-  let !(a, g1) = nextDouble g0
-      !(b, g2) = nextDouble g1
-      !z = boxMuller a b
-   in (z, g2)
+-- | Reserved purpose of the fallback generators of the 'Double' normals.
+purposeNormal64 :: Word64
+purposeNormal64 = 0x4e524d3634
 
--- | 'nextNormalPair' in single precision from two 'Float' draws.
+-- | The fast-path value of draw @r@: magnitude @r >> 11@ times the signed width of layer
+-- @r & 1023@, with the sign in bit 10.
+zigX :: Word64 -> Double
+zigX r = int2Double (fromIntegral (r `shiftR` 11)) * indexPrimArray zigW (fromIntegral (r .&. 2047))
+{-# INLINE zigX #-}
+
+zigHit :: Word64 -> Bool
+zigHit r = r `shiftR` 11 < indexPrimArray zigK (fromIntegral (r .&. 1023))
+{-# INLINE zigHit #-}
+
+-- | The normal of draw @r@ with index @i@ in the stream of its key. @sub@ is the purpose child
+-- of the fallbacks, which only a miss forces.
+ziggurat :: Tandem -> Word64 -> Word64 -> Double
+ziggurat sub i r
+  | zigHit r = zigX r
+  | otherwise = zigSlow r (split i sub)
+{-# INLINE ziggurat #-}
+
+-- | The slow path of Appendix A from a draw @r@ that missed, on the draws of the fallback @f@.
+-- @ln@ is @-0.5 neg2Log@, exact given 'neg2Log', and every other operation rounds once.
+zigSlow :: Word64 -> Tandem -> Double
+zigSlow r f
+  | zigHit r = x
+  | layer == 0 = beyond f
+  | otherwise =
+      let !(u, f') = nextDouble f
+          !y = zigY' layer + u * (zigY' (layer + 1) - zigY' layer)
+       in if -0.5 * neg2Log y < -0.5 * (x * x) then x else let !(r', f'') = nextWord64 f' in zigSlow r' f''
+  where
+    layer = fromIntegral (r .&. 1023) :: Int
+    x = zigX r
+    zigY' = indexPrimArray zigY
+    -- Marsaglia's tail method.
+    beyond h =
+      let !(ua, h1) = nextDouble h
+          !(ub, h2) = nextDouble h1
+          !a = 0.5 * neg2Log (1 - ua) / zigR
+          !b = 0.5 * neg2Log (1 - ub)
+       in if b + b < a * a then beyond h2 else if testBit r 10 then negate (zigR + a) else zigR + a
+{-# NOINLINE zigSlow #-}
+
+-- | A standard normal by the ziggurat from one 64-bit draw. It equals element 0 of a fill.
+nextNormal :: Tandem -> (Double, Tandem)
+nextNormal g =
+  let !(r, g') = nextWord64 g
+      !z = ziggurat (fallbackOf purposeNormal64 g) (align (position g) 64 `shiftR` 6) r
+   in (z, g')
+
+-- | Fill with standard normals by the ziggurat. Element @i@ comes from draw @i@ of the 64-bit
+-- fill, and a miss continues on @split g@ of @purpose 0x4e524d3634@ of the fill's key at
+-- position 0, where @g@ is the draw's index in the stream. So the fill equals the scalar
+-- 'nextNormal' draws and a fill cut at any element equals the whole fill. An empty fill aligns
+-- the position to 64 bits.
+fillNormalM :: PrimMonad m => MU.MVector (PrimState m) Double -> Tandem -> m Tandem
+fillNormalM (U.MV_Double (P.MVector off n mba)) g
+  | n >= nativeMin = stToPrim (native 64 n (keyed g cFillNormalF64) mba off n g)
+  | otherwise = stToPrim $ do
+      -- The draws land in the output, which each element then overwrites.
+      g' <- fillWord64M (U.MV_Word64 (P.MVector off n mba)) g
+      let sub = fallbackOf purposeNormal64 g
+          first = align (position g) 64 `shiftR` 6
+          go i
+            | i == off + n = pure ()
+            | otherwise = do
+                r <- readByteArray mba i
+                writeByteArray mba i (ziggurat sub (first + fromIntegral (i - off)) r)
+                go (i + 1)
+      go off
+      pure g'
+
+-- Float normals and exponentials ----------------------------------------------------------
+
+-- | Two single-precision standard normals by Box-Muller from two 'Float' draws, the cosine half
+-- first.
 nextNormalPairFloat :: Tandem -> ((Float, Float), Tandem)
 nextNormalPairFloat g0 =
   let !(a, g1) = nextFloat g0
@@ -132,12 +204,8 @@ nextNormalPairFloat g0 =
       !z = boxMullerF a b
    in (z, g2)
 
--- | A standard normal: the cosine half of 'nextNormalPair'. It consumes two draws and equals
--- element 0 of a fill.
-nextNormal :: Tandem -> (Double, Tandem)
-nextNormal g = let !((c, _), g') = nextNormalPair g in (c, g')
-
--- | 'nextNormal' in single precision.
+-- | A single-precision standard normal: the cosine half of 'nextNormalPairFloat'. It consumes
+-- two draws and equals element 0 of a fill.
 nextNormalFloat :: Tandem -> (Float, Tandem)
 nextNormalFloat g = let !((c, _), g') = nextNormalPairFloat g in (c, g')
 
@@ -190,16 +258,10 @@ each f b = go 0
       | otherwise = MU.unsafeRead b i >>= MU.unsafeWrite b i . f >> go (i + 1)
 {-# INLINE each #-}
 
--- | Fill with standard normals. Pair @j@ is elements @2j@ and @2j + 1@, the cosine half first,
--- from draws @2j@ and @2j + 1@ of the 'Double' fill, so the fill is the flattened sequence of
--- 'nextNormalPair' draws. An odd length writes the cosine half of its last pair and still
--- consumes both draws. An empty fill leaves the position as it is.
-fillNormalM :: PrimMonad m => MU.MVector (PrimState m) Double -> Tandem -> m Tandem
-fillNormalM v@(U.MV_Double (P.MVector off n mba)) g
-  | n >= nativeMin = stToPrim (native 64 (n + n `rem` 2) (keyed g cFillNormalF64) mba off n g)
-  | otherwise = stToPrim (normals fillDoubleM boxMuller nextNormal v g)
-
--- | 'fillNormalM' in single precision from the 'Float' fill.
+-- | Fill with single-precision standard normals by Box-Muller. Pair @j@ is elements @2j@ and
+-- @2j + 1@, the cosine half first, from draws @2j@ and @2j + 1@ of the 'Float' fill, so the fill
+-- is the flattened sequence of 'nextNormalPairFloat' draws. An odd length writes the cosine half
+-- of its last pair and still consumes both draws. An empty fill leaves the position as it is.
 fillNormalFloatM :: PrimMonad m => MU.MVector (PrimState m) Float -> Tandem -> m Tandem
 fillNormalFloatM v@(U.MV_Float (P.MVector off n mba)) g
   | n >= nativeMin = stToPrim (native 32 (n + n `rem` 2) (keyed g cFillNormalF32) mba off n g)
