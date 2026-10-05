@@ -131,7 +131,8 @@ benchmark bench
     , mwc-random  >=0.15 && <0.16
     , random
     , tandem
-    , tasty-bench >=0.4  && <0.6
+    , tasty
+    , tasty-bench >=0.3.4 && <0.6
     , vector
 
   ghc-options:    -O2 -rtsopts
