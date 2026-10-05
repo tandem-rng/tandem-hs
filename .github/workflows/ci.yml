@@ -27,6 +27,9 @@ jobs:
       - run: |
           python3 tools/gen_fixtures.py ../spec/vectors.json ../tandem-c/tests ../tandem-cuda/tests > tests/Fixtures.hs
           git diff --exit-code tests/Fixtures.hs
+      - run: |
+          python3 tools/gen_zig_tables.py ../spec/tables/normal_f64_zig1024.json > src/System/Random/Tandem/ZigTables.hs
+          git diff --exit-code src/System/Random/Tandem/ZigTables.hs
 
   test:
     name: ${{ matrix.os }} GHC ${{ matrix.ghc }}

@@ -57,6 +57,7 @@ library
     System.Random.Tandem.Generator
     System.Random.Tandem.Math
     System.Random.Tandem.Native
+    System.Random.Tandem.ZigTables
 
   -- tandem.c includes itself for its AVX2 copy, so it must keep its name.
   c-sources:
