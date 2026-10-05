@@ -91,8 +91,8 @@ import System.Random.Tandem.Generator
 -- $fills
 -- A fill of @n@ elements returns the values of @n@ scalar draws and the generator after them.
 -- It aligns the position once and then reads whole rows. A plain fill of 0 elements aligns the
--- position, as the specification defines. A bounded, normal or exponential fill of 0 elements
--- leaves it as it is.
+-- position, as the specification defines, and so does a 'Double' normal fill. A bounded,
+-- 'Float' normal or exponential fill of 0 elements leaves it as it is.
 
 pureFill :: MU.Unbox a => (forall s. MU.MVector s a -> Tandem -> ST s Tandem) -> Int -> Tandem -> (U.Vector a, Tandem)
 pureFill fill n g = runST $ do

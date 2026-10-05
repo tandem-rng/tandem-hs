@@ -15,9 +15,16 @@ draws for a range up to 2^32, 64-bit draws above.
 
 ## Normals
 
-Normals are Box-Muller. Pair `j` is elements `2j` and `2j + 1` from draws `2j` and `2j + 1`,
-the cosine half first. An odd length writes the cosine half of its last pair and still consumes
-both draws. The scalar normal is element 0 of a fill.
+`Double` normals use the 1024-layer ziggurat of Appendix A. Element `i` takes 64-bit draw `i`.
+A draw outside the inner rectangles, 0.43 % of them, continues on `split g` of
+`purpose 0x4e524d3634` of the fill's key, where `g` is the draw's index in the stream. A fill cut
+at any element equals the whole fill, and the scalar normal is element 0 of a fill.
+`System.Random.Tandem.ZigTables` holds the tables. `tools/gen_zig_tables.py` writes it from the
+spec's `tables/normal_f64_zig1024.json` and checks the file's SHA-256.
+
+`Float` normals are Box-Muller. Pair `j` is elements `2j` and `2j + 1` from draws `2j` and
+`2j + 1`, the cosine half first. An odd length writes the cosine half of its last pair and still
+consumes both draws.
 
 ## Exponentials
 

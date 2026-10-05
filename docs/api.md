@@ -26,14 +26,14 @@ example =
 - `split`, `fork`, `purpose`: child generators by index, from the current block, and by name.
 - Scalar draws that return the value and the advanced generator: `nextWord32`, `nextWord64`,
   `nextDouble`, `nextFloat`, `nextBelow32`, `nextBelow64`, `nextNormal`, `nextNormalFloat`,
-  `nextNormalPair`, `nextNormalPairFloat`, `nextExponential`, `nextExponentialFloat`.
+  `nextNormalPairFloat`, `nextExponential`, `nextExponentialFloat`.
 - Fills into new unboxed vectors (`fillWord32 n g`) and in place into `Data.Vector.Unboxed`
   mutable vectors or slices of them (`fillWord32M v g`), for every kind above:
   `fillWord32`, `fillWord64`, `fillDouble`, `fillFloat`, `fillBelow32`, `fillBelow64`,
   `fillBelow`, `fillNormal`, `fillNormalFloat`, `fillExponential`, `fillExponentialFloat`.
 - Every draw and fill aligns the position to its width, as the specification requires. A plain
-  fill of 0 elements aligns the position. A bounded, normal or exponential fill of 0 elements
-  leaves it as it is.
+  fill or a `Double` normal fill of 0 elements aligns the position. A bounded, `Float` normal
+  or exponential fill of 0 elements leaves it as it is.
 - `System.Random.Tandem.Core`: the step `T`, the seeding function `F` and the blocks.
 
 ## random

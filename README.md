@@ -11,7 +11,7 @@ pseudorandom number generator. It produces the stream the specification defines,
 Bounded integers, normals and exponentials equal tandem-c's fixtures bit for bit. Fills of 1024
 or more elements run a vendored `tandem.c`, and smaller fills and scalar draws are pure Haskell.
 
-It needs GHC 9.12 or newer. `cbits/tandem.c` is vendored from tandem-c `4e9a69f`. Add the
+It needs GHC 9.12 or newer. `cbits/tandem.c` is vendored from tandem-c `121db59`. Add the
 repository to `cabal.project`:
 
 ```cabal

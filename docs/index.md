@@ -21,7 +21,7 @@ source-repository-package
 ```
 
 GHC 9.12 or newer, `GHC2024`. The library depends on `base`, `primitive`, `vector` and `random`,
-and compiles `cbits/tandem.c`, vendored from tandem-c 4e9a69f, with the C compiler GHC uses.
+and compiles `cbits/tandem.c`, vendored from tandem-c 121db59, with the C compiler GHC uses.
 
 ## AI assistance
 
