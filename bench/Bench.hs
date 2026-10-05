@@ -53,6 +53,7 @@ main = do
           "fill 2^9, 2^13 times"
           [ bench "u32" (whnf (short T.fillWord32M) t)
           , bench "f64" (whnf (short T.fillDoubleM) t)
+          , bench "f32" (whnf (short T.fillFloatM) t)
           , bench "normal f64" (whnf (short T.fillNormalM) t)
           ]
     , bgroup
@@ -68,6 +69,12 @@ main = do
               [ bench "Tandem" (fill T.fillDouble)
               , unfold (R.uniformR (0, 1 :: Double))
               , bench "mwc" (whnfIO (U.replicateM n (RS.uniformDouble01M gen)))
+              ]
+          , bgroup
+              "f32"
+              [ bench "Tandem" (fill T.fillFloat)
+              , unfold (R.uniformR (0, 1 :: Float))
+              , bench "mwc" (whnfIO (U.replicateM n (RS.uniformFloat01M gen)))
               ]
           , bgroup
               "below 1000"
