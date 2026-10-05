@@ -42,6 +42,14 @@ flag tools
   default:     False
   manual:      True
 
+flag cbits
+  description:
+    Draw through the vendored tandem-c. Without it every draw and fill runs in
+    Haskell, with the same values, several times slower.
+
+  default:     True
+  manual:      True
+
 -- Off by default, as cabal cannot tell whether LLVM is installed.
 flag llvm
   description:
@@ -75,13 +83,15 @@ library
     System.Random.Tandem.Rounds
     System.Random.Tandem.ZigTables
 
-  -- tandem.c includes itself for its AVX2 copy, so it must keep its name.
-  c-sources:
-    cbits/hs_tandem.c
-    cbits/tandem.c
+  if flag(cbits)
+    -- tandem.c includes itself for its AVX2 copy, so it must keep its name.
+    c-sources:
+      cbits/hs_tandem.c
+      cbits/tandem.c
 
-  include-dirs:    cbits
-  cc-options:      -std=c11 -ffp-contract=off
+    include-dirs: cbits
+    cc-options:   -std=c11 -ffp-contract=off
+    cpp-options:  -DTANDEM_CBITS
 
   build-depends:
     , base       >=4.20 && <5

@@ -79,7 +79,7 @@ fillBelow32M n v g = stToPrim (below32 n v g)
 below32 :: Word32 -> MU.MVector s Word32 -> Tandem -> ST s Tandem
 below32 n v@(U.MV_Word32 (P.MVector off len mba)) g
   | len == 0 = pure g
-  | len >= nativeMin = native 32 len (\p a i c -> keyed g cFillU32Below p a i c n) mba off len g
+  | native = runC KU32Below (fromIntegral n) 32 len mba off len g
   | otherwise = do
       g' <- fillWord32M v g
       bound mul32 nextWord32 (fallbackOf purposeBelow32 g) (align (position g) 32 `shiftR` 5) n v
@@ -92,7 +92,7 @@ fillBelow64M n v g = stToPrim (below64 n v g)
 below64 :: Word64 -> MU.MVector s Word64 -> Tandem -> ST s Tandem
 below64 n v@(U.MV_Word64 (P.MVector off len mba)) g
   | len == 0 = pure g
-  | len >= nativeMin = native 64 len (\p a i c -> keyed g cFillU64Below p a i c n) mba off len g
+  | native = runC KU64Below n 64 len mba off len g
   | otherwise = do
       g' <- fillWord64M v g
       bound mul64 nextWord64 (fallbackOf purposeBelow64 g) (align (position g) 64 `shiftR` 6) n v
@@ -181,7 +181,7 @@ nextNormal g =
 -- the position to 64 bits.
 fillNormalM :: PrimMonad m => MU.MVector (PrimState m) Double -> Tandem -> m Tandem
 fillNormalM (U.MV_Double (P.MVector off n mba)) g
-  | n >= nativeMin = stToPrim (native 64 n (keyed g cFillNormalF64) mba off n g)
+  | native && n > 0 = stToPrim (runC KNormalF64 0 64 n mba off n g)
   | otherwise = stToPrim $ do
       -- The draws land in the output, which each element then overwrites.
       g' <- fillWord64M (U.MV_Word64 (P.MVector off n mba)) g
@@ -268,7 +268,7 @@ each f b = go 0
 -- of its last pair and still consumes both draws. An empty fill leaves the position as it is.
 fillNormalFloatM :: PrimMonad m => MU.MVector (PrimState m) Float -> Tandem -> m Tandem
 fillNormalFloatM v@(U.MV_Float (P.MVector off n mba)) g
-  | n >= nativeMin = stToPrim (native 32 (n + n `rem` 2) (keyed g cFillNormalF32) mba off n g)
+  | native && n > 0 = stToPrim (runC KNormalF32 0 32 (n + n `rem` 2) mba off n g)
   | otherwise = stToPrim (normals fillFloatM boxMullerF nextNormalFloat v g)
 
 normals
@@ -291,11 +291,11 @@ normals fill pair next v g = do
 -- fill equals the scalar 'nextExponential' draws. An empty fill leaves the position as it is.
 fillExponentialM :: PrimMonad m => MU.MVector (PrimState m) Double -> Tandem -> m Tandem
 fillExponentialM v@(U.MV_Double (P.MVector off n mba)) g
-  | n >= nativeMin = stToPrim (native 64 n (keyed g cFillExponentialF64) mba off n g)
+  | native && n > 0 = stToPrim (runC KExponentialF64 0 64 n mba off n g)
   | otherwise = stToPrim (mapped fillDoubleM (each (\u -> 0.5 * neg2Log (1 - u))) n v g)
 
 -- | 'fillExponentialM' in single precision from the 'Float' fill.
 fillExponentialFloatM :: PrimMonad m => MU.MVector (PrimState m) Float -> Tandem -> m Tandem
 fillExponentialFloatM v@(U.MV_Float (P.MVector off n mba)) g
-  | n >= nativeMin = stToPrim (native 32 n (keyed g cFillExponentialF32) mba off n g)
+  | native && n > 0 = stToPrim (runC KExponentialF32 0 32 n mba off n g)
   | otherwise = stToPrim (mapped fillFloatM (each (\u -> 0.5 * neg2LogF (1 - u))) n v g)

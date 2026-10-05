@@ -2,8 +2,16 @@
 
 ## Fills
 
-Fills of 1024 or more elements call the vendored tandem-c. Shorter fills and scalar draws run
-in Haskell. Both give the same values.
+The stream comes from the vendored tandem-c. A generator's cache holds a `tandem_rng` and the 32
+words of its current row. A scalar draw outside that row loads the row through tandem-c, and
+every fill runs in tandem-c, from a copy of the cached `tandem_rng`, so that older generator
+values keep theirs. The copy keeps tandem-c's own row cache: a later row of the chunk group costs
+one step per row, and only a jump to another group seeds. Normals, exponentials and bounded
+draws map the words in Haskell for scalar draws, and in tandem-c for fills.
+
+With the package flag `cbits` off, nothing calls C. The cache then holds the eight lane states of
+the current row, rows step in Haskell on `Word` lanes, and every value is the same. CI runs the
+tests both ways.
 
 ## Bounded integers
 

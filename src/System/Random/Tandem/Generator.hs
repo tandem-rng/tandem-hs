@@ -27,9 +27,7 @@ module System.Random.Tandem.Generator
   , mul32
   , mul64
   , lemire
-  , nativeMin
-  , native
-  , keyed
+  , runC
   , fillWord32M
   , fillWord64M
   , fillDoubleM
@@ -42,11 +40,13 @@ import Control.Monad.ST.Unsafe (unsafeIOToST)
 import Data.Bits (complement, countTrailingZeros, popCount, shiftL, shiftR, unsafeShiftL, unsafeShiftR, (.&.), (.|.))
 import Data.Primitive.ByteArray (MutableByteArray (..), writeByteArray)
 import Data.Primitive.PrimArray
-  ( MutablePrimArray
+  ( MutablePrimArray (..)
   , PrimArray
+  , copyPrimArray
   , emptyPrimArray
   , indexPrimArray
   , newPrimArray
+  , sizeofPrimArray
   , unsafeFreezePrimArray
   , writePrimArray
   )
@@ -54,8 +54,8 @@ import Data.Primitive.Types (Prim)
 import Data.Vector.Primitive.Mutable qualified as P
 import Data.Vector.Unboxed.Base qualified as U
 import Data.Word (Word32, Word64)
-import Foreign.C.Types (CSize)
-import GHC.Exts (Int (I#), MutableByteArray#, timesWord2#, word64ToWord#, wordToWord64#, writeWord8ArrayAsWord64#)
+import Foreign.C.Types (CInt)
+import GHC.Exts (Int (I#), timesWord2#, word64ToWord#, wordToWord64#, writeWord8ArrayAsWord64#)
 import GHC.ByteOrder (ByteOrder (LittleEndian), targetByteOrder)
 import GHC.ST (ST (..))
 import GHC.Float (int2Double, int2Float)
@@ -76,8 +76,9 @@ data Tandem = Tandem
   , tRow :: {-# UNPACK #-} !Word64
   -- ^ The row in the cache, or 'noRow'.
   , tCache :: {-# UNPACK #-} !(PrimArray Word32)
-  -- ^ The eight lane states of row 'tRow': word @w@ of lane @l@ at @8 l + w@, @o@ in words 0
-  -- to 3 and @h@ in words 4 to 7.
+  -- ^ With tandem-c, its tandem_rng in words 0 to 'stateWords' - 1, then the 32 stream words of
+  -- row 'tRow' if there is one. Without it, the eight lane states of row 'tRow': word @w@ of lane
+  -- @l@ at @8 l + w@, @o@ in words 0 to 3 and @h@ in words 4 to 7.
   }
 
 instance Eq Tandem where
@@ -239,8 +240,34 @@ runRows g row0 nrows emit = do
 loadRow :: Word64 -> Tandem -> Tandem
 loadRow r g
   | tRow g == r = g
+  | native = refill r g
   | otherwise = advance r g
 {-# INLINE loadRow #-}
+
+-- | Load row @r@ through tandem-c. The cache holds the tandem_rng in words 0 to
+-- 'stateWords' - 1 and the 32 stream words of row 'tRow' after them. A row after the cached one
+-- in the same chunk group costs one step per row in C, and the row of the cache costs none.
+refill :: Word64 -> Tandem -> Tandem
+refill r g = runST $ do
+  m@(MutablePrimArray mm) <- newPrimArray (stateWords + 32)
+  fresh <- loadState g m
+  let Quad k0 k1 k2 k3 = tKey g
+  _ <- unsafeIOToST (cRun mm fresh k0 k1 k2 k3 (tK g) (r `shiftL` 10) (kind KU32) mm (fromIntegral stateWords) 32 0)
+  cache <- unsafeFreezePrimArray m
+  pure g {tRow = r, tCache = cache}
+{-# NOINLINE refill #-}
+
+-- | Copy the tandem_rng of the cache into @m@. The result is 1 when the cache holds none, which
+-- tells tandem-c to start from the transport form.
+loadState :: Tandem -> MutablePrimArray s Word32 -> ST s CInt
+loadState g m
+  | sizeofPrimArray (tCache g) >= stateWords = copyPrimArray m 0 (tCache g) 0 stateWords >> pure 0
+  | otherwise = pure 1
+{-# INLINE loadState #-}
+
+kind :: Kind -> CInt
+kind = fromIntegral . fromEnum
+{-# INLINE kind #-}
 
 -- Sequential draws step every lane forward inside the group, the common case. Anything else
 -- goes through 'runRows', which seeds.
@@ -272,8 +299,12 @@ align :: Word64 -> Int -> Word64
 align p w = (p + fromIntegral w - 1) .&. complement (fromIntegral w - 1)
 {-# INLINE align #-}
 
+-- | The stream word at bit position @p@ of the loaded row: in tandem-c's cache the row's words
+-- in stream order, in Haskell's the @o@ words of the lane states.
 wordAt :: PrimArray Word32 -> Word64 -> Word32
-wordAt c p = indexPrimArray c (fromIntegral (((p `shiftR` 4) .&. 0x38) .|. ((p `shiftR` 5) .&. 3)))
+wordAt c p
+  | native = indexPrimArray c (stateWords + fromIntegral ((p `shiftR` 5) .&. 31))
+  | otherwise = indexPrimArray c (fromIntegral (((p `shiftR` 4) .&. 0x38) .|. ((p `shiftR` 5) .&. 3)))
 {-# INLINE wordAt #-}
 
 -- | The @w@ bits at the aligned position @p@, @w@ a power of two from 1 to 64, with the row
@@ -394,46 +425,32 @@ toFloat raw = int2Float (fromIntegral (raw `shiftR` 8)) * 0x1p-24
 -- @i@.
 type PutBlock s = MutableByteArray s -> Int -> Word -> Word -> Word -> Word -> ST s ()
 
--- | Fills of at least this many elements run in the vendored tandem-c, whose SIMD row loops are
--- several times faster than GHC's scalar code. Shorter fills keep the cached row, which saves
--- the seeding that every C call pays.
-nativeMin :: Int
-nativeMin = 1024
-
--- | A tandem-c fill applied to the key words and @K@ of a generator.
-keyed :: Tandem -> (Word32 -> Word32 -> Word32 -> Word32 -> Word64 -> Word32 -> r) -> Word64 -> r
-keyed g f p = let Quad a b c d = tKey g in f a b c d p (tK g)
-{-# INLINE keyed #-}
-
--- | Run the tandem-c fill @f@ on elements @[off, off + n)@ of the array, in pieces of 2^20
--- elements so that no unsafe call delays a garbage collection for long. Pieces join exactly,
--- since every fill ends where the next one starts and the pieces have even lengths. The end of
--- the @draws@ draws of @w@ bits is checked before anything is written. The cached row stays, as
--- it depends on the key and the row index only.
-native
-  :: Int
-  -> Int
-  -> (Word64 -> MutableByteArray# s -> CSize -> CSize -> IO Word64)
-  -> MutableByteArray s
-  -> Int
-  -> Int
-  -> Tandem
-  -> ST s Tandem
-native w draws f (MutableByteArray mba) off n g = start w draws (tPos g) `seq` go off (tPos g)
-  where
-    end = off + n
-    go i p
-      | i >= end = pure g {tPos = p}
-      | otherwise = do
-          let c = min (2 ^ (20 :: Int)) (end - i)
-          p' <- unsafeIOToST (f p mba (fromIntegral i) (fromIntegral c))
-          go (i + c) p'
-{-# INLINE native #-}
+-- | Run the tandem-c fill of @k@ (with bound @range@) on elements @[off, off + n)@ of the array,
+-- continuing the tandem_rng of the cache, in pieces of 2^20 elements so that no unsafe call
+-- delays a garbage collection for long. Pieces join exactly, since every fill ends where the
+-- next one starts and the pieces have even lengths. The end of the @draws@ draws of @w@ bits is
+-- checked before anything is written. The generator keeps the tandem_rng without a loaded row.
+runC :: Kind -> Word64 -> Int -> Int -> MutableByteArray s -> Int -> Int -> Tandem -> ST s Tandem
+runC k range w draws (MutableByteArray out) off n g = start w draws (tPos g) `seq` do
+  m@(MutablePrimArray mm) <- newPrimArray stateWords
+  fresh <- loadState g m
+  let Quad k0 k1 k2 k3 = tKey g
+      end = off + n
+      go i p f
+        | i >= end = pure p
+        | otherwise = do
+            let c = min (2 ^ (20 :: Int)) (end - i)
+            p' <- unsafeIOToST (cRun mm f k0 k1 k2 k3 (tK g) p (kind k) out (fromIntegral i) (fromIntegral c) range)
+            go (i + c) p' 0
+  p <- go off (tPos g) fresh
+  cache <- unsafeFreezePrimArray m
+  pure g {tPos = p, tRow = noRow, tCache = cache}
+{-# INLINE runC #-}
 
 -- | The fill of @w@-bit elements: the values of as many scalar draws.
-fillPrim :: Prim a => Int -> (Word64 -> a) -> PutBlock s -> NativeFill s -> P.MVector s a -> Tandem -> ST s Tandem
-fillPrim w conv putBlock cfill v@(P.MVector off n mba) g
-  | n >= nativeMin = native w n (keyed g cfill) mba off n g
+fillPrim :: Prim a => Int -> (Word64 -> a) -> PutBlock s -> Kind -> P.MVector s a -> Tandem -> ST s Tandem
+fillPrim w conv putBlock k v@(P.MVector off n mba) g
+  | native && n > 0 = runC k 0 w n mba off n g
   | otherwise = fillRows w conv putBlock v g
 {-# INLINE fillPrim #-}
 
@@ -502,11 +519,11 @@ pair64 a b = fromIntegral (a .|. (b `unsafeShiftL` 32))
 
 -- | Fill a vector with 32-bit draws.
 fillWord32M :: PrimMonad m => U.MVector (PrimState m) Word32 -> Tandem -> m Tandem
-fillWord32M (U.MV_Word32 v) g = stToPrim (fillPrim 32 fromIntegral put32 cFillU32 v g)
+fillWord32M (U.MV_Word32 v) g = stToPrim (fillPrim 32 fromIntegral put32 KU32 v g)
 
 -- | Fill a vector with 64-bit draws.
 fillWord64M :: PrimMonad m => U.MVector (PrimState m) Word64 -> Tandem -> m Tandem
-fillWord64M (U.MV_Word64 v) g = stToPrim (fillPrim 64 id put cFillU64 v g)
+fillWord64M (U.MV_Word64 v) g = stToPrim (fillPrim 64 id put KU64 v g)
   where
     put mba i a b c d = do
       writeByteArray mba i (pair64 a b)
@@ -514,7 +531,7 @@ fillWord64M (U.MV_Word64 v) g = stToPrim (fillPrim 64 id put cFillU64 v g)
 
 -- | Fill a vector with uniform 'Double's in @[0, 1)@.
 fillDoubleM :: PrimMonad m => U.MVector (PrimState m) Double -> Tandem -> m Tandem
-fillDoubleM (U.MV_Double v) g = stToPrim (fillPrim 64 toDouble put cFillF64 v g)
+fillDoubleM (U.MV_Double v) g = stToPrim (fillPrim 64 toDouble put KF64 v g)
   where
     put mba i a b c d = do
       writeByteArray mba i (toDouble (pair64 a b))
@@ -522,7 +539,7 @@ fillDoubleM (U.MV_Double v) g = stToPrim (fillPrim 64 toDouble put cFillF64 v g)
 
 -- | Fill a vector with uniform 'Float's in @[0, 1)@.
 fillFloatM :: PrimMonad m => U.MVector (PrimState m) Float -> Tandem -> m Tandem
-fillFloatM (U.MV_Float v) g = stToPrim (fillPrim 32 (toFloat . fromIntegral) put cFillF32 v g)
+fillFloatM (U.MV_Float v) g = stToPrim (fillPrim 32 (toFloat . fromIntegral) put KF32 v g)
   where
     put mba i a b c d = do
       writeByteArray mba i (toFloatW a)

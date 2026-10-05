@@ -1,41 +1,62 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnliftedFFITypes #-}
 
--- | The fills of the vendored tandem-c, through @cbits/hs_tandem.c@. Each takes the key words,
--- the position, @K@, the array, the element offset and the length, and returns the end position.
--- The calls are unsafe, so the garbage collector cannot move the array during them.
+-- | The fills of the vendored tandem-c, through @cbits/hs_tandem.c@, or, with the package flag
+-- @cbits@ off, nothing: 'native' is then 'False' and the generator runs in Haskell.
 module System.Random.Tandem.Native
-  ( NativeFill
-  , NativeBelow
-  , cFillU32
-  , cFillU64
-  , cFillF32
-  , cFillF64
-  , cFillNormalF32
-  , cFillNormalF64
-  , cFillExponentialF32
-  , cFillExponentialF64
-  , cFillU32Below
-  , cFillU64Below
+  ( native
+  , stateWords
+  , Kind (..)
+  , cRun
   ) where
 
 import Data.Word (Word32, Word64)
-import Foreign.C.Types (CSize (..))
+import Foreign.C.Types (CInt (..), CSize (..))
 import GHC.Exts (MutableByteArray#)
 
-type NativeFill s =
-  Word32 -> Word32 -> Word32 -> Word32 -> Word64 -> Word32 -> MutableByteArray# s -> CSize -> CSize -> IO Word64
+-- | The element kinds of @hs_tandem_run@, in its order.
+data Kind
+  = KU32
+  | KU64
+  | KF32
+  | KF64
+  | KNormalF32
+  | KNormalF64
+  | KExponentialF32
+  | KExponentialF64
+  | KU32Below
+  | KU64Below
+  deriving (Enum)
 
-type NativeBelow s r =
-  Word32 -> Word32 -> Word32 -> Word32 -> Word64 -> Word32 -> MutableByteArray# s -> CSize -> CSize -> r -> IO Word64
+-- | Whether the generator runs on tandem-c.
+native :: Bool
 
-foreign import ccall unsafe "hs_tandem_fill_u32" cFillU32 :: NativeFill s
-foreign import ccall unsafe "hs_tandem_fill_u64" cFillU64 :: NativeFill s
-foreign import ccall unsafe "hs_tandem_fill_f32" cFillF32 :: NativeFill s
-foreign import ccall unsafe "hs_tandem_fill_f64" cFillF64 :: NativeFill s
-foreign import ccall unsafe "hs_tandem_fill_normal_f32" cFillNormalF32 :: NativeFill s
-foreign import ccall unsafe "hs_tandem_fill_normal_f64" cFillNormalF64 :: NativeFill s
-foreign import ccall unsafe "hs_tandem_fill_exponential_f32" cFillExponentialF32 :: NativeFill s
-foreign import ccall unsafe "hs_tandem_fill_exponential_f64" cFillExponentialF64 :: NativeFill s
-foreign import ccall unsafe "hs_tandem_fill_u32_below" cFillU32Below :: NativeBelow s Word32
-foreign import ccall unsafe "hs_tandem_fill_u64_below" cFillU64Below :: NativeBelow s Word64
+-- | The size of a tandem_rng in 32-bit words, rounded up to a multiple of 2.
+stateWords :: Int
+
+#ifdef TANDEM_CBITS
+native = True
+
+-- | @cRun st fresh k0 k1 k2 k3 kk pos kind out off n range@ fills @n@ elements of @kind@ at
+-- element offset @off@ of @out@ from bit position @pos@, continuing the tandem_rng in @st@, or
+-- starting it from the transport form when @fresh@ is nonzero, and returns the end position. The
+-- call is unsafe, so the garbage collector cannot move the arrays during it.
+foreign import ccall unsafe "hs_tandem_run" cRun
+  :: MutableByteArray# s -> CInt -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word64 -> CInt
+  -> MutableByteArray# s -> CSize -> CSize -> Word64 -> IO Word64
+
+foreign import ccall unsafe "hs_tandem_state_bytes" stateBytes :: CSize
+
+stateWords = 2 * ((fromIntegral stateBytes + 7) `quot` 8)
+#else
+native = False
+
+cRun
+  :: MutableByteArray# s -> CInt -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word64 -> CInt
+  -> MutableByteArray# s -> CSize -> CSize -> Word64 -> IO Word64
+cRun _ _ _ _ _ _ _ _ _ _ _ _ _ = error "System.Random.Tandem: built without cbits"
+
+stateWords = 0
+#endif
+{-# INLINE native #-}

@@ -214,12 +214,12 @@ crossFixtures =
         forM_ cudaBelow64 $ \(n, _, want) -> U.toList (fst (fillBelow64 n 64 (fromKey cudaKey 0 32))) @?= want
         forM_ cudaBelow32At $ \(p, n, _, want) -> U.toList (fst (fillBelow32 n 64 (fromKey cudaKey p 32))) @?= want
         forM_ cudaBelow64At $ \(p, n, _, want) -> U.toList (fst (fillBelow64 n 64 (fromKey cudaKey p 32))) @?= want
-    , testCase "ziggurat normals in Haskell and C, cut at every element" $
+    , testCase "ziggurat normals from scalar draws and fills, cut at every element" $
         forM_ normals $ \(p, want, end) -> do
           let g = seek p (seed 42)
               (v, h) = fillNormal 64 g
+              -- Scalar normals run the ziggurat in Haskell, fills in tandem-c unless cbits is off.
               (xs, h') = draws 64 nextNormal g
-              -- 1024 elements take the C fill.
               (w, hc) = fillNormal 1024 g
           (bits64 v, position h) @?= (want, end)
           (map castDoubleToWord64 xs, position h') @?= (want, end)
