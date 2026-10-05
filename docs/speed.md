@@ -12,23 +12,25 @@ loop. `StdGen` is `random`'s SplitMix generator: its fills are `U.unfoldrExactN`
 exponentials. `mwc` is `mwc-random` 0.15 with `uniformVector`, `uniformR`, `standard` and
 `exponential`.
 
-| | Tandem | StdGen | mwc |
-|---|---|---|---|
-| fill `Word32` | 0.20 | 10.3 | 4.55 |
-| fill `Double` | 0.46 | 7.89 | 6.94 |
-| fill `Float` | 0.23 | 7.61 | 4.67 |
-| fill bounded, range 1000 | 0.50 | 3.79 | 4.46 |
-| fill normal `Double` | 0.95 | | 13.6 |
-| fill exponential `Double` | 1.28 | | 11.9 |
-| fill `Word32`, 2^9 values | 0.96 | | |
-| fill `Double`, 2^9 values | 1.89 | | |
-| fill `Float`, 2^9 values | 1.12 | | |
-| fill normal `Double`, 2^9 values | 5.03 | | |
-| scalar `Word64` | 5.15 | 0.76 | 6.28 |
-| scalar `Double` | 5.44 | 7.31 | 7.07 |
-| scalar normal `Double` | 8.36 | | 13.4 |
+| | Tandem | `-f llvm` | `-f -cbits` | StdGen | mwc |
+|---|---|---|---|---|---|
+| fill `Word32` | 0.20 | 0.21 | 1.02 | 10.1 | 4.55 |
+| fill `Double` | 0.47 | 0.49 | 2.15 | 8.34 | 7.03 |
+| fill `Float` | 0.23 | 0.25 | 1.10 | 7.72 | 4.65 |
+| fill bounded, range 1000 | 0.51 | 0.55 | 1.79 | 3.72 | 4.74 |
+| fill normal `Double` | 1.09 | 1.12 | 5.60 | | 14.7 |
+| fill exponential `Double` | 1.30 | 1.34 | 5.29 | | 12.6 |
+| fill `Word32`, 2^9 values | 0.24 | 0.26 | 1.08 | | |
+| fill `Double`, 2^9 values | 0.51 | 0.54 | 2.14 | | |
+| fill `Float`, 2^9 values | 0.27 | 0.29 | 1.30 | | |
+| fill normal `Double`, 2^9 values | 1.21 | 1.29 | 6.37 | | |
+| scalar `Word64` | 3.04 | 3.36 | 5.83 | 0.90 | 6.64 |
+| scalar `Double` | 3.31 | 3.32 | 6.10 | 7.68 | 7.28 |
+| scalar normal `Double` | 6.51 | 6.70 | 9.11 | | 15.0 |
 
-The fills of 2^22 values run in the vendored tandem-c, about 19 GiB/s for `Word32`, as fast as
-tandem-c itself in the same run. Fills below 1024 values stay in Haskell and reach 4.0 GiB/s, as
-GHC's native code generator does not vectorize them. A scalar draw is a pure function of the
-generator and returns a new one, so every row costs a new row cache.
+Tandem runs on the vendored tandem-c, about 19 GiB/s for `Word32` fills, as fast as tandem-c
+itself in the same run, and close to it from 512 values on. The `-f llvm` column builds with LLVM
+21, which gains nothing once the rows come from C. The `-f -cbits` column runs every row in
+Haskell with the native code generator, which does not vectorize them. A scalar draw is a pure
+function of the generator and returns a new one, so it costs about 3 ns where tandem-c's
+mutable generator takes 1.5. The `StdGen` and `mwc` columns come from the default build.
