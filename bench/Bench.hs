@@ -44,6 +44,28 @@ short f g0 = runST (MU.unsafeNew 512 >>= \v -> fills v (8192 :: Int) g0)
     fills _ 0 g = pure (T.position g)
     fills v i g = f v g >>= fills v (i - 1)
 
+-- | 'short' for StdGen: 2^13 fills of 2^9 values into one vector, one draw per value.
+shortStd :: forall a. U.Unbox a => (R.StdGen -> (a, R.StdGen)) -> R.StdGen -> a
+shortStd next g0 = runST (MU.unsafeNew 512 >>= \v -> fills v (8192 :: Int) g0)
+  where
+    fills :: MU.MVector s a -> Int -> R.StdGen -> ST s a
+    fills v 0 _ = MU.read v 0
+    fills v i g = fill v 0 g >>= fills v (i - 1)
+    fill :: MU.MVector s a -> Int -> R.StdGen -> ST s R.StdGen
+    fill v j g
+      | j == 512 = pure g
+      | otherwise = let !(x, g') = next g in MU.unsafeWrite v j x >> fill v (j + 1) g'
+
+-- | 'short' for mwc, which draws in IO.
+shortMwc :: U.Unbox a => (MWC.GenIO -> IO a) -> MWC.GenIO -> IO a
+shortMwc draw gen = MU.unsafeNew 512 >>= \v -> fills v (8192 :: Int)
+  where
+    fills v 0 = MU.read v 0
+    fills v i = fill v 0 >> fills v (i - 1)
+    fill v j
+      | j == 512 = pure ()
+      | otherwise = draw gen >>= MU.unsafeWrite v j >> fill v (j + 1)
+
 -- | A table row: its label, how to turn seconds into the printed figure, and the Tandem, StdGen
 -- and mwc cases.
 data Row = Row String (Double -> Double) [Maybe Benchmarkable]
@@ -64,8 +86,18 @@ main = do
       io = Just . whnfIO
       long label bytes cases = Row label (rate n bytes) cases
       shortRow
-        :: U.Unbox a => String -> Int -> (forall s. MU.MVector s a -> T.Tandem -> ST s T.Tandem) -> Row
-      shortRow label bytes f = Row (label ++ ", 2^9 values") (rate (512 * 8192) bytes) [Just (whnf (short f) t)]
+        :: U.Unbox a
+        => String
+        -> Int
+        -> (forall s. MU.MVector s a -> T.Tandem -> ST s T.Tandem)
+        -> Maybe (R.StdGen -> (a, R.StdGen))
+        -> (MWC.GenIO -> IO a)
+        -> Row
+      shortRow label bytes f std mwc =
+        Row
+          (label ++ ", 2^9 values")
+          (rate (512 * 8192) bytes)
+          [Just (whnf (short f) t), (\next -> whnf (shortStd next) s) <$> std, io (shortMwc mwc gen)]
       scalar label cases = Row label (rate m 8) cases
       fills =
         [ long "fill `Word32`" 4
@@ -82,10 +114,10 @@ main = do
         , long "fill normal `Double`" 8 [fill T.fillNormal, Nothing, io (U.replicateM n (MWCD.standard gen))]
         , long "fill exponential `Double`" 8
             [fill T.fillExponential, Nothing, io (U.replicateM n (MWCD.exponential 1 gen))]
-        , shortRow "fill `Word32`" 4 T.fillWord32M
-        , shortRow "fill `Double`" 8 T.fillDoubleM
-        , shortRow "fill `Float`" 4 T.fillFloatM
-        , shortRow "fill normal `Double`" 8 T.fillNormalM
+        , shortRow "fill `Word32`" 4 T.fillWord32M (Just R.genWord32) MWC.uniform
+        , shortRow "fill `Double`" 8 T.fillDoubleM (Just (R.uniformR (0, 1))) RS.uniformDouble01M
+        , shortRow "fill `Float`" 4 T.fillFloatM (Just (R.uniformR (0, 1))) RS.uniformFloat01M
+        , shortRow "fill normal `Double`" 8 T.fillNormalM Nothing MWCD.standard
         ]
       scalars =
         [ scalar "scalar `Word64`"
