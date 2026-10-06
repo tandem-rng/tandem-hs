@@ -1,8 +1,8 @@
 {-# LANGUAGE RankNTypes #-}
 
 -- | Fills of 2^22 values, short fills that stay in Haskell, and loops of 2^20 scalar draws, against
--- random's StdGen (SplitMix) and mwc-random. Prints Markdown rows: fills in GiB/s of output,
--- scalar draws in ns per draw.
+-- random's StdGen (SplitMix) and mwc-random. Prints Markdown rows in GiB/s of output, 8 bytes
+-- per scalar draw.
 module Main (main) where
 
 import Control.Monad.ST (ST, runST)
@@ -48,13 +48,9 @@ short f g0 = runST (MU.unsafeNew 512 >>= \v -> fills v (8192 :: Int) g0)
 -- and mwc cases.
 data Row = Row String (Double -> Double) [Maybe Benchmarkable]
 
--- | GiB/s of a fill writing @values@ of @bytes@ each.
+-- | GiB/s of @values@ values of @bytes@ each, written by a fill or returned by scalar draws.
 rate :: Int -> Int -> Double -> Double
 rate values bytes t = fromIntegral (values * bytes) / t / 2 ^ (30 :: Int)
-
--- | ns per draw of a loop of @m@ draws.
-perDraw :: Double -> Double
-perDraw t = t / fromIntegral m * 1e9
 
 main :: IO ()
 main = do
@@ -70,7 +66,7 @@ main = do
       shortRow
         :: U.Unbox a => String -> Int -> (forall s. MU.MVector s a -> T.Tandem -> ST s T.Tandem) -> Row
       shortRow label bytes f = Row (label ++ ", 2^9 values") (rate (512 * 8192) bytes) [Just (whnf (short f) t)]
-      scalar label cases = Row label perDraw cases
+      scalar label cases = Row label (rate m 8) cases
       fills =
         [ long "fill `Word32`" 4
             [fill T.fillWord32, unfold R.genWord32, io (MWC.uniformVector gen n :: IO (U.Vector Word32))]
@@ -107,7 +103,7 @@ main = do
         ]
   putStrLn "Fills, GiB/s of output\n\n| | Tandem | StdGen | mwc |\n|---|---|---|---|"
   mapM_ printRow fills
-  putStrLn "\nScalar draws, ns per draw\n\n| | Tandem | StdGen | mwc |\n|---|---|---|---|"
+  putStrLn "\nScalar draws, GiB/s of output\n\n| | Tandem | StdGen | mwc |\n|---|---|---|---|"
   mapM_ printRow scalars
   where
     printRow (Row label figure cases) = do
