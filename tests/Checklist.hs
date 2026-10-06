@@ -137,7 +137,7 @@ rejections c
     n = number "n" c
 
 -- | Every case of a file: the whole fill, the scalar draws, and fills cut at elements 1, 7, 20,
--- 21 and n - 1 and run in order on one generator. The end positions follow the rules of the
+-- 21 and n - 1 (Float normals: 2, 8, 20 and the largest even element below n) and run in order on one generator. The end positions follow the rules of the
 -- appendices, and the file's own @end@ agrees with them.
 cases :: String -> Int -> TestTree
 cases file count = testCase file $ do
@@ -175,8 +175,9 @@ checkCase c = do
     when (n > 0 && rejected == 0) $ do
       let (xs, h') = scalarOf c n g
       assertEqual (label ++ " scalar") (want, stop) (xs, fromIntegral (position h'))
-    -- A Float normal fill cut at an odd element drops a sin half, so only even cuts compose.
-    forM_ [k | k <- [1, 7, 20, 21, n - 1], k > 0, k < n, kind /= NormalF32 || even k] $ \k -> do
+    -- A Float normal cut must fall on a pair: the checklist cuts at 2, 8, 20 and the largest even element below n.
+    let cuts = if kind == NormalF32 then [2, 8, 20, (n - 1) `div` 2 * 2] else [1, 7, 20, 21, n - 1]
+    forM_ [k | k <- cuts, k > 0, k < n] $ \k -> do
       let (v, h') = runCuts (fillOf c) [k, n - k] g
       assertEqual (label ++ " cut at " ++ show k) (want, stop) (v, fromIntegral (position h'))
   pure (rejected > 0)
