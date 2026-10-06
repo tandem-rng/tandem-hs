@@ -8,7 +8,7 @@
 
 Haskell implementation of [Tandem8x32](https://github.com/tandem-rng/spec), a noncryptographic
 pseudorandom number generator. It produces the stream the specification defines, bit for bit.
-Bounded integers, normals and exponentials equal tandem-c's fixtures bit for bit. The stream comes
+Bounded integers, normals, exponentials and weighted choice equal tandem-c's fixtures bit for bit. The stream comes
 from a vendored `tandem.c`, or from pure Haskell with the package flag `cbits` off.
 
 It needs GHC 9.12 or newer. `cbits/tandem.c` is vendored from tandem-c `121db59`. Add the

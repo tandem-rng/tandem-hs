@@ -33,6 +33,15 @@ module System.Random.Tandem
   , position
   , seek
 
+    -- * Weighted choice
+    -- $choice
+  , Choice
+  , choice
+  , choiceSize
+  , choiceCapacity
+  , choiceCuts
+  , choiceAliases
+
     -- * Derived generators
   , split
   , fork
@@ -50,6 +59,7 @@ module System.Random.Tandem
   , nextNormalPairFloat
   , nextExponential
   , nextExponentialFloat
+  , nextChoice
 
     -- * Fills
     -- $fills
@@ -64,6 +74,7 @@ module System.Random.Tandem
   , fillNormalFloat
   , fillExponential
   , fillExponentialFloat
+  , fillChoice
 
     -- * Fills in place
   , fillWord32M
@@ -77,6 +88,7 @@ module System.Random.Tandem
   , fillNormalFloatM
   , fillExponentialM
   , fillExponentialFloatM
+  , fillChoiceM
   ) where
 
 import Control.Monad.ST (ST, runST)
@@ -84,6 +96,7 @@ import Data.Vector.Unboxed qualified as U
 import Data.Vector.Unboxed.Mutable qualified as MU
 import Data.Word (Word32, Word64)
 
+import System.Random.Tandem.Choice
 import System.Random.Tandem.Core (Quad (..))
 import System.Random.Tandem.Derived
 import System.Random.Tandem.Generator
@@ -93,6 +106,12 @@ import System.Random.Tandem.Generator
 -- It aligns the position once and then reads whole rows. A plain fill of 0 elements aligns the
 -- position, as the specification defines, and so does a 'Double' normal fill. A bounded,
 -- 'Float' normal or exponential fill of 0 elements leaves it as it is.
+
+-- $choice
+-- 'choice' builds the alias table of Appendix C from weights, in exact integers, and draws
+-- nothing. A draw takes one 64-bit draw and returns an index in @[0, m)@ with probability
+-- proportional to its weight, with no retry, so a fill cut at any element equals the whole
+-- fill. An empty fill aligns the position to 64 bits.
 
 pureFill :: MU.Unbox a => (forall s. MU.MVector s a -> Tandem -> ST s Tandem) -> Int -> Tandem -> (U.Vector a, Tandem)
 pureFill fill n g = runST $ do
@@ -146,3 +165,7 @@ fillExponential = pureFill fillExponentialM
 -- | @n@ single-precision standard exponentials, as 'fillExponentialFloatM'.
 fillExponentialFloat :: Int -> Tandem -> (U.Vector Float, Tandem)
 fillExponentialFloat = pureFill fillExponentialFloatM
+
+-- | @n@ indices of a weighted choice, as 'fillChoiceM'.
+fillChoice :: Choice -> Int -> Tandem -> (U.Vector Word32, Tandem)
+fillChoice t = pureFill (fillChoiceM t)

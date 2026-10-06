@@ -6,8 +6,7 @@ on:
 
 env:
   TANDEM_C: 121db5902d6136c7e5258970c0160121af3ab1d0
-  TANDEM_CUDA: 76eddaeb775f5ca3e5f4518dcb6ca0f4cd2bd907
-  TANDEM_SPEC: ac4c4f9a690772184620a777f252669fe82bd1a5
+  TANDEM_SPEC: f4205457e1e2ed19e655e36820015d7bdcf037dd
 
 jobs:
   vendored:
@@ -17,7 +16,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check out the pinned commits
         run: |
-          for r in tandem-c:$TANDEM_C tandem-cuda:$TANDEM_CUDA spec:$TANDEM_SPEC; do
+          for r in tandem-c:$TANDEM_C spec:$TANDEM_SPEC; do
             git init -q "../${r%%:*}"
             git -C "../${r%%:*}" fetch -q --depth 1 "https://github.com/tandem-rng/${r%%:*}" "${r#*:}"
             git -C "../${r%%:*}" checkout -q FETCH_HEAD
@@ -25,8 +24,9 @@ jobs:
       - run: for f in tandem.c tandem.h tandem_normal_tables.h; do diff "../tandem-c/$f" "cbits/$f"; done
       - run: for f in tests/data/*.bin; do cmp "$f" "../tandem-c/tests/data/$(basename "$f")"; done
       - run: |
-          python3 tools/gen_fixtures.py ../spec/vectors.json ../tandem-c/tests ../tandem-cuda/tests > tests/Fixtures.hs
+          python3 tools/gen_fixtures.py ../spec/vectors.json > tests/Fixtures.hs
           git diff --exit-code tests/Fixtures.hs
+      - run: for f in tests/conformance/*.json; do cmp "$f" "../spec/conformance/$(basename "$f")"; done
       - run: |
           python3 tools/gen_zig_tables.py ../spec/tables/normal_f64_zig1024.json > src/System/Random/Tandem/ZigTables.hs
           git diff --exit-code src/System/Random/Tandem/ZigTables.hs

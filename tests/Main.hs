@@ -1,11 +1,10 @@
 module Main (main) where
 
-import Control.Exception (ErrorCall, evaluate, try)
 import Control.Monad (forM_, replicateM, when)
 import Control.Monad.ST (ST, runST)
 import Data.Bits (shiftL, shiftR, xor, (.&.))
 import Data.ByteString qualified as B
-import Data.List (mapAccumL, nub)
+import Data.List (nub)
 import Data.Vector.Unboxed qualified as U
 import Data.Vector.Unboxed.Mutable qualified as MU
 import Data.Word (Word32, Word64, Word8)
@@ -13,8 +12,10 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32)
 import System.Random qualified as R
 import System.Random.Stateful qualified as RS
 import Test.Tasty (TestTree, defaultMain, testGroup)
-import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
+import Checklist (checklist)
+import Conformance
 import Fixtures
 import System.Random.Tandem
 import System.Random.Tandem.Core
@@ -24,28 +25,11 @@ main =
   defaultMain $
     testGroup
       "tandem"
-      [specVectors, streamDumps, cache, cacheMixed, crossFixtures, bitHashes, derivedFills, distributions, positions, randomGen]
-
--- | @n@ scalar draws.
-draws :: Int -> (Tandem -> (a, Tandem)) -> Tandem -> ([a], Tandem)
-draws n next g0 = let (g1, xs) = mapAccumL (\g _ -> let (x, g') = next g in (g', x)) g0 [1 .. n] in (xs, g1)
-
-bits64 :: U.Vector Double -> [Word64]
-bits64 = map castDoubleToWord64 . U.toList
-
-bits32 :: U.Vector Float -> [Word32]
-bits32 = map castFloatToWord32 . U.toList
+      [specVectors, streamDumps, cache, cacheMixed, checklist, bitHashes, derivedFills, distributions, positions, randomGen]
 
 -- | Seed @lo + hi 2^64@, tandem-c's @tandem_seed(lo, hi, 0)@.
 seed2 :: Integer -> Integer -> Tandem
 seed2 lo hi = seed (lo + hi * 2 ^ (64 :: Int))
-
-fails :: a -> IO ()
-fails x = do
-  r <- try (evaluate x)
-  case r of
-    Left (_ :: ErrorCall) -> pure ()
-    Right _ -> assertFailure "expected an error"
 
 -- Specification ---------------------------------------------------------------------------
 
@@ -91,16 +75,6 @@ leWords n bs
   | B.null bs = []
   | otherwise =
       foldr (\b acc -> acc `shiftL` 8 + fromIntegral b) 0 (B.unpack (B.take n bs)) : leWords n (B.drop n bs)
-
--- | One vector from consecutive in-place fills of the given lengths.
-fillCuts :: MU.Unbox a => [Int] -> (forall s. MU.MVector s a -> Tandem -> ST s Tandem) -> Tandem -> (U.Vector a, Tandem)
-fillCuts cuts fillM g = runST $ do
-  m <- MU.new (sum cuts)
-  let go _ [] h = pure h
-      go i (c : cs) h = fillM (MU.slice i c m) h >>= go (i + c) cs
-  h <- go 0 cuts g
-  u <- U.unsafeFreeze m
-  pure (u, h)
 
 -- | A dump against the fill, against as many scalar draws, and against the same fill cut into
 -- pieces in place, with equal end positions.
@@ -183,75 +157,6 @@ cacheMixed = testCase "scalar draws and short fills share the cache at every chu
           (c, _) = nextWord32 g4
       a : U.toList v ++ b : U.toList w ++ [c] @?= [wordRef vectorKey kk (p0 + 32 * i) | i <- [0 .. 1002]]
 
--- Cross-check fixtures --------------------------------------------------------------------
-
-crossFixtures :: TestTree
-crossFixtures =
-  testGroup
-    "cross fixtures"
-    [ testCase "scalar bounded draws" $ do
-        forM_ below32 $ \(n, want, end) -> do
-          let (xs, g) = draws 64 (nextBelow32 n) start
-          (xs, position g) @?= (want, end)
-        forM_ below64 $ \(n, want, end) -> do
-          let (xs, g) = draws 64 (nextBelow64 n) start
-          (xs, position g) @?= (want, end)
-    , testCase "bounded fills" $ do
-        rejected <- fmap or . sequence $
-          [ do
-              let (v, g) = fillBelow32 n 64 (seek p (seed 42))
-              (U.toList v, position g) @?= (want, end)
-              pure (want /= fst (draws 64 (nextBelow32 n) (seek p (seed 42))))
-          | (p, n, want, end) <- crossFillBelow32
-          ]
-        assertBool "some fill takes the fallback" rejected
-        forM_ crossFillBelow64 $ \(p, n, want, end) -> do
-          let (v, g) = fillBelow64 n 64 (seek p (seed 42))
-          (U.toList v, position g) @?= (want, end)
-    , testCase "tandem-cuda bounded fills" $ do
-        key (seed 42) @?= cudaKey
-        forM_ cudaBelow32 $ \(n, _, want) -> U.toList (fst (fillBelow32 n 64 (fromKey cudaKey 0 32))) @?= want
-        forM_ cudaBelow64 $ \(n, _, want) -> U.toList (fst (fillBelow64 n 64 (fromKey cudaKey 0 32))) @?= want
-        forM_ cudaBelow32At $ \(p, n, _, want) -> U.toList (fst (fillBelow32 n 64 (fromKey cudaKey p 32))) @?= want
-        forM_ cudaBelow64At $ \(p, n, _, want) -> U.toList (fst (fillBelow64 n 64 (fromKey cudaKey p 32))) @?= want
-    , testCase "ziggurat normals from scalar draws and fills, cut at every element" $
-        forM_ normals $ \(p, want, end) -> do
-          let g = seek p (seed 42)
-              (v, h) = fillNormal 64 g
-              -- Scalar normals run the ziggurat in Haskell, fills in tandem-c unless cbits is off.
-              (xs, h') = draws 64 nextNormal g
-              (w, hc) = fillNormal 1024 g
-          (bits64 v, position h) @?= (want, end)
-          (map castDoubleToWord64 xs, position h') @?= (want, end)
-          (take 64 (bits64 w), position hc) @?= (want, end + 64 * 960)
-          forM_ [1 .. 63] $ \c -> do
-            let (u, hu) = fillCuts [c, 64 - c] fillNormalM g
-            (bits64 u, position hu) @?= (want, end)
-    , testCase "Float normal pairs" $ do
-        let (fs, h) = draws 64 nextNormalPairFloat start
-        (concatMap (\(c, s) -> map castFloatToWord32 [c, s]) fs, position h) @?= normalPairsFloat
-    , testCase "tandem-cuda normal and exponential fills" $ do
-        let at p = fromKey cudaKey p 32
-        forM_ cudaNormal64 $ \(p, n, want) -> bits64 (fst (fillNormal n (at p))) @?= want
-        forM_ cudaNormal32 $ \(p, n, want) -> bits32 (fst (fillNormalFloat n (at p))) @?= want
-        forM_ cudaExponential64 $ \(p, n, want) -> bits64 (fst (fillExponential n (at p))) @?= want
-        forM_ cudaExponential32 $ \(p, n, want) -> bits32 (fst (fillExponentialFloat n (at p))) @?= want
-    , testCase "exponentials" $ do
-        forM_ exponentials $ \(p, want, end) -> do
-          let (v, g) = fillExponential 64 (seek p (seed 42))
-              (xs, h) = draws 64 nextExponential (seek p (seed 42))
-          (bits64 v, position g) @?= (want, end)
-          (map castDoubleToWord64 xs, position h) @?= (want, end)
-        forM_ exponentialsFloat $ \(p, want, end) -> do
-          let (v, g) = fillExponentialFloat 64 (seek p (seed 42))
-              (xs, h) = draws 64 nextExponentialFloat (seek p (seed 42))
-          (bits32 v, position g) @?= (want, end)
-          (map castFloatToWord32 xs, position h) @?= (want, end)
-    ]
-  where
-    -- tandem-c's fixtures start after one Bool draw.
-    start = seek 1 (seed 42)
-
 -- Bit hashes ------------------------------------------------------------------------------
 
 fnv :: Word64 -> Int -> Word64 -> Word64
@@ -260,46 +165,25 @@ fnv h bytes x = foldl' (\a i -> (a `xor` ((x `shiftR` (8 * i)) .&. 0xff)) * 0x10
 hashDoubles :: Word64 -> U.Vector Double -> Word64
 hashDoubles = U.foldl' (\h x -> fnv h 8 (castDoubleToWord64 x))
 
-hashFloats :: Word64 -> U.Vector Float -> Word64
-hashFloats = U.foldl' (\h x -> fnv h 4 (fromIntegral (castFloatToWord32 x)))
-
--- | The hashes of tandem-c's tests/test_normal_bits.c and tests/test_exponential_bits.c. The
--- 'Double' normals hash in three ways: the C fill, the Haskell scalar draws, and the Haskell
--- fill in pieces below the C threshold.
+-- | The 'Double' normal dumps of hashes.json hash in three ways: the C fill, the Haskell scalar
+-- draws, and the Haskell fill in pieces below the C threshold, as the file's own value. The
+-- checklist test hashes every dump in one way.
 bitHashes :: TestTree
-bitHashes =
-  testGroup
-    "bit hashes"
-    [ testCase "normals" $ do
-        let gs = [seek p (seed2 2026 7) | p <- starts]
-        normals3 1000000 gs @?= three 0xa61cfa844c85f7c1
-        foldl' (\h g -> hashFloats h (fst (fillNormalFloat (2 * 1000000 - 1) g))) basis gs @?= 0xaa1ea656ce73a4fb
-    , testCase "normals against the Python reference" $
-        forM_ [(0, 0x0c4059ed409d578d, 12800000), (2373, 0x30ce40c86b295193, 12802432)] $ \(p, want, end) -> do
-          let g = fromKey vectorKey p 32
-          normals3 200000 [g] @?= three want
-          position (snd (fillNormal 200000 g)) @?= end
-          position (snd (fillCuts (replicate 200 1000) fillNormalM g)) @?= end
-    , testCase "exponentials" $ hashOf 1000000 fillExponential fillExponentialFloat @?= 0x47f8f98297d94ee2
-    ]
+bitHashes = testCase "normal dumps by fill, scalar draws and pieces" $ do
+  cs <- loadCases "hashes.json"
+  forM_ [c | c <- cs, not (hasField "file" c), map fst (dumpDraws c) == ["fill_normal_f64"]] $ \c -> do
+    let n = sum (map snd (dumpDraws c))
+        gs = [fromKey (caseKey c) (fromIntegral p) (fromIntegral (number "K" c)) | p <- numbers "starts" c]
+        want = hex (text "fnv1a" c)
+        viaC = foldl' (\h g -> hashDoubles h (fst (fillNormal n g))) basis gs
+        scalar = foldl' (\h g -> hashDraws n nextNormal h g) basis gs
+        pieces = foldl' (\h g -> hashDoubles h (fst (fillCuts (replicate (n `div` 1000) 1000) fillNormalM g))) basis gs
+    (viaC, scalar, pieces) @?= (want, want, want)
+    when (hasField "end" c) $ forM_ gs $ \g -> do
+      position (snd (fillNormal n g)) @?= fromIntegral (number "end" c)
+      position (snd (fillCuts (replicate (n `div` 1000) 1000) fillNormalM g)) @?= fromIntegral (number "end" c)
   where
-    starts = [0, 1, 77, 12345, 2 ^ (30 :: Int)]
     basis = 0xcbf29ce484222325
-    three h = (h, h, h)
-    normals3 n gs =
-      let viaC = foldl' (\h g -> hashDoubles h (fst (fillNormal n g))) basis gs
-          scalar = foldl' (\h g -> hashDraws n nextNormal h g) basis gs
-          pieces = foldl' (\h g -> hashDoubles h (fst (fillCuts (replicate (n `div` 1000) 1000) fillNormalM g))) basis gs
-       in (viaC, scalar, pieces)
-    hashOf n f64 f32 =
-      foldl'
-        ( \h p ->
-            let (d, g) = f64 n (seek p (seed2 2026 7))
-                (f, _) = f32 n g
-             in hashFloats (hashDoubles h d) f
-        )
-        basis
-        starts
 
 -- | 'hashDoubles' of @n@ scalar draws, without a list of them.
 hashDraws :: Int -> (Tandem -> (Double, Tandem)) -> Word64 -> Tandem -> Word64

@@ -26,11 +26,19 @@ example =
 - `split`, `fork`, `purpose`: child generators by index, from the current block, and by name.
 - Scalar draws that return the value and the advanced generator: `nextWord32`, `nextWord64`,
   `nextDouble`, `nextFloat`, `nextBelow32`, `nextBelow64`, `nextNormal`, `nextNormalFloat`,
-  `nextNormalPairFloat`, `nextExponential`, `nextExponentialFloat`.
+  `nextNormalPairFloat`, `nextExponential`, `nextExponentialFloat`, `nextChoice`.
 - Fills into new unboxed vectors (`fillWord32 n g`) and in place into `Data.Vector.Unboxed`
   mutable vectors or slices of them (`fillWord32M v g`), for every kind above:
   `fillWord32`, `fillWord64`, `fillDouble`, `fillFloat`, `fillBelow32`, `fillBelow64`,
-  `fillBelow`, `fillNormal`, `fillNormalFloat`, `fillExponential`, `fillExponentialFloat`.
+  `fillBelow`, `fillNormal`, `fillNormalFloat`, `fillExponential`, `fillExponentialFloat`,
+  `fillChoice`.
+- Weighted choice, Appendix C of the specification: `choice weights` builds the alias table of a
+  `Vector Double` in exact integers, or returns `Nothing` unless there are 1 to 2^32 - 1 weights,
+  all finite and not negative, and one is positive. `nextChoice` and `fillChoice` return
+  zero-based `Word32` indices, one 64-bit draw each with no retry, so a fill cut anywhere equals
+  the whole fill. An empty fill aligns the position to 64 bits. `choiceSize`, `choiceCapacity`,
+  `choiceCuts` and `choiceAliases` expose the table. The table and the draw run in Haskell, over
+  the C or the Haskell 64-bit fill.
 - Every draw and fill aligns the position to its width, as the specification requires. A plain
   fill or a `Double` normal fill of 0 elements aligns the position. A bounded, `Float` normal
   or exponential fill of 0 elements leaves it as it is.

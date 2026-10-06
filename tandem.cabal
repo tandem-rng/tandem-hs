@@ -24,6 +24,7 @@ extra-source-files:
   cbits/tandem.h
   cbits/tandem_normal_tables.h
   tests/data/*.bin
+  tests/conformance/*.json
 
 source-repository head
   type:     git
@@ -76,6 +77,7 @@ library
     System.Random.Tandem.Core
 
   other-modules:
+    System.Random.Tandem.Choice
     System.Random.Tandem.Derived
     System.Random.Tandem.Generator
     System.Random.Tandem.Math
@@ -109,7 +111,10 @@ test-suite tests
   type:           exitcode-stdio-1.0
   hs-source-dirs: tests
   main-is:        Main.hs
-  other-modules:  Fixtures
+  other-modules:
+    Checklist
+    Conformance
+    Fixtures
   build-depends:
     , base
     , bytestring  >=0.11 && <0.13
