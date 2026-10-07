@@ -36,7 +36,10 @@ consumes both draws.
 
 ## Exponentials
 
-Exponentials are `-ln(1 - u)` from one draw each.
+Exponentials are `-ln(1 - u)` from one draw each. The `Double` logarithm is the normals'. The
+`Float` one, `negLogF`, is tandem-c's `neg_log_f32`: it carries `(2 - 2m) / (m + 1)` in two floats
+and adds `k ln 2` by an exact two-sum, within 0.571 ulp, so `1 - exp(-x)` maps every draw back to
+its own 2^-24 grid point.
 
 ## Fused multiply-adds
 

@@ -5,7 +5,7 @@
 -- equal tandem-c's on every target. GHC never contracts on its own.
 module System.Random.Tandem.Math
   ( neg2Log
-  , neg2LogF
+  , negLogF
   , boxMullerF
   ) where
 
@@ -58,6 +58,31 @@ neg2LogF x =
       !p = fmaf zz (fmaf zz (fmaf zz 0.14275366 0.20000061) 0.33333334) 1.0
    in fmaf nk 2.857213530660374e-06 (fmaf nk 1.38629150390625 ((s * (-4.0)) * p))
 {-# INLINE neg2LogF #-}
+
+-- | @-ln x@ in single precision for the 'Float' exponentials, tandem-c's @neg_log_f32@: within
+-- 0.571 ulp for every @x = 1 - u@ on the @2^-24@ grid, so that @1 - exp(-x)@ maps each draw back
+-- to its own grid point. @u = (2 - 2m) / (m + 1)@ is carried as @uh + r / d@ with @m + 1 = d + dl@
+-- exactly, and @nk ln2_hi + uh@ is split by fast two-sum, exact because @nk ln2_hi@ is either 0
+-- or larger than @|uh|@. @uh@ rounds in an fma as in tandem-c, where that stops a contracting
+-- compiler from fusing @num * rcp@ into the two-sum.
+negLogF :: Float -> Float
+negLogF x =
+  let !ix = castFloatToWord32 x + 0x004afb0d
+      !nk = int2Float (127 - fromIntegral (ix `shiftR` 23))
+      !mant = castWord32ToFloat ((ix .&. 0x007fffff) + 0x3f3504f3)
+      !num = fmaf mant (-2.0) 2.0
+      !d = mant + 1
+      !dl = mant - (d - 1)
+      !rcp = 1 / d
+      !uh = fmaf num rcp 0
+      !r = fmaf (negate uh) dl (fmaf (negate uh) d num)
+      !v = uh * uh
+      !q = fmaf v (fmaf v 0.0023109776 0.012496489) 0.08333336
+      !kHi = nk * 0.693145751953125
+      !hi = kHi + uh
+      !e = uh - (hi - kHi)
+   in hi + fmaf (uh * v) q (fmaf r rcp (fmaf nk 1.428606765330187e-06 e))
+{-# INLINE negLogF #-}
 
 -- | The Box-Muller pair @(r cos 2 pi b, r sin 2 pi b)@ with @r = sqrt(-2 ln(1 - a))@. The angle
 -- needs no range reduction: @b - q/4@ for the nearest quarter turn @q@ is exact, the series on

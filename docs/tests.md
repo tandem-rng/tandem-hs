@@ -13,7 +13,7 @@ cabal test
   to 65536 against the definition.
 - The conformance files of the spec, byte copies in `tests/conformance`, read by
   `tests/Conformance.hs` and run by `tests/Checklist.hs`, which demonstrates every item of the
-  spec's `conformance/CHECKLIST.md` at b31af72 that the port offers. Every case of the bounded, normal,
+  spec's `conformance/CHECKLIST.md` at 2a4bd08 that the port offers. Every case of the bounded, normal,
   exponential and weighted choice files runs as a fill, as scalar draws and cut at elements 1,
   7, 20, 21 and n - 1, bit for bit with its end position. The checks cover the choice tables,
   the global draw index of the fallback, the width from the range, empty fills, the pair rule
@@ -34,7 +34,7 @@ cabal test
 ## Fixtures
 
 `tools/gen_fixtures.py` converts the specification's `vectors.json` into `tests/Fixtures.hs`.
-`tests/conformance/*.json` are byte copies of tandem-spec b31af72 `conformance/*.json`. `tools/gen_zig_tables.py` writes the ziggurat
+`tests/conformance/*.json` are byte copies of tandem-spec 2a4bd08 `conformance/*.json`. `tools/gen_zig_tables.py` writes the ziggurat
 tables from the spec's JSON. `cabal run -f tools tandem-dump -- normals` writes the bytes of
 tandem-c's `tools/dump_normals.c`, with SHA-256
 `700ec4d2f4d6b82aaa56c6eff18a4e5919585fdbd093988773383d580ea610d1`.

@@ -219,7 +219,7 @@ nextExponential g = let !(u, g') = nextDouble g; !e = 0.5 * neg2Log (1 - u) in (
 
 -- | 'nextExponential' in single precision from one 'Float' draw.
 nextExponentialFloat :: Tandem -> (Float, Tandem)
-nextExponentialFloat g = let !(u, g') = nextFloat g; !e = 0.5 * neg2LogF (1 - u) in (e, g')
+nextExponentialFloat g = let !(u, g') = nextFloat g; !e = negLogF (1 - u) in (e, g')
 
 -- | Run @fill@ on the first @m@ elements and map them in place. An empty fill leaves the
 -- position as it is, unlike a plain fill.
@@ -298,4 +298,4 @@ fillExponentialM v@(U.MV_Double (P.MVector off n mba)) g
 fillExponentialFloatM :: PrimMonad m => MU.MVector (PrimState m) Float -> Tandem -> m Tandem
 fillExponentialFloatM v@(U.MV_Float (P.MVector off n mba)) g
   | native && n > 0 = stToPrim (runC KExponentialF32 0 32 n mba off n g)
-  | otherwise = stToPrim (mapped fillFloatM (each (\u -> 0.5 * neg2LogF (1 - u))) n v g)
+  | otherwise = stToPrim (mapped fillFloatM (each (\u -> negLogF (1 - u))) n v g)
