@@ -5,8 +5,8 @@ on:
   pull_request:
 
 env:
-  TANDEM_C: 121db5902d6136c7e5258970c0160121af3ab1d0
-  TANDEM_SPEC: b31af7238076b414a3eb2a128bfd010cce136287
+  TANDEM_C: 1c75956c39581836c1f6e190d1072c9a43be6b0d
+  TANDEM_SPEC: 2a4bd08205596bc12bb7ae102862c97a0477dc2e
 
 jobs:
   vendored:
@@ -63,7 +63,7 @@ jobs:
         run: |
           dump=$(cabal list-bin -f tools exe:tandem-dump)
           test "$($dump normals | shasum -a 256 | cut -d' ' -f1)" = 700ec4d2f4d6b82aaa56c6eff18a4e5919585fdbd093988773383d580ea610d1
-          test "$($dump exponentials | shasum -a 256 | cut -d' ' -f1)" = 5c035a4ef1368231d25a9c2f9201be2df3224e28a14549a50625d0db3770ef4e
+          test "$($dump exponentials | shasum -a 256 | cut -d' ' -f1)" = 7b12b7c36baf14ab42f7736a5a67925c3c7b1bfafc8d50f078ba1af927044dd5
       - name: Fused multiply-adds lower to instructions
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
