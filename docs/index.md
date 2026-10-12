@@ -9,7 +9,7 @@ elements run a vendored `tandem.c`, and smaller fills and scalar draws are pure 
 - [Design](design.md): the fills, bounded integers, normals, exponentials and fused
   multiply-adds.
 - [Tests](tests.md): what the suite checks, the fixtures, and what CI runs.
-- [Speed](speed.md): Apple M4 figures against `StdGen` and `mwc-random`.
+- [Performance](speed.md): Apple M4 figures against `StdGen` and `mwc-random`.
 
 ## Install
 

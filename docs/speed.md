@@ -1,4 +1,4 @@
-# Speed
+# Performance
 
 `cabal bench` prints the rows in GiB/s of output. A scalar draw of `Word64` or `Double` counts
 8 bytes.
