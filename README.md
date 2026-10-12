@@ -11,14 +11,17 @@ pseudorandom number generator. It produces the stream the specification defines,
 Bounded integers, normals, exponentials and weighted choice equal tandem-c's fixtures bit for bit. The stream comes
 from a vendored `tandem.c`, or from pure Haskell with the package flag `cbits` off.
 
-It needs GHC 9.12 or newer. `cbits/tandem.c` is vendored from tandem-c `1c75956`. Add the
-repository to `cabal.project`:
+## Install
+
+Add the repository to `cabal.project`:
 
 ```cabal
 source-repository-package
   type: git
   location: https://github.com/tandem-rng/tandem-hs
 ```
+
+## Quick start
 
 ```haskell
 import System.Random.Tandem qualified as T
@@ -32,10 +35,16 @@ example = (x, zs, k)
     (k, _) = T.nextBelow32 10 worker     -- uniform in [0, 10), Lemire
 ```
 
+## Requirements
+
+It needs GHC 9.12 or newer. `cbits/tandem.c` is vendored from tandem-c `1c75956`.
+
+## Documentation
+
 `Tandem` is a `RandomGen` and `SplitGen` of `random` 1.3. See [API](docs/api.md) for every
 draw and fill, and [design](docs/design.md), [tests](docs/tests.md) and [speed](docs/speed.md)
 for the rest.
 
 Portions of the code were generated with the assistance of LLMs.
 
-[Documentation](https://tandem-rng.github.io/tandem-hs/) · [Apache 2.0 license](LICENSE)
+[Docs](https://tandem-rng.github.io/tandem-hs/) · [Specification](https://github.com/tandem-rng/spec/blob/main/SPEC.md) · [Website](https://tandem-rng.github.io/) · [Issues](https://github.com/tandem-rng/tandem-hs/issues) · [License](LICENSE)
