@@ -1,8 +1,8 @@
 {-# LANGUAGE RankNTypes #-}
 
--- | Fills of 2^22 values, short fills that stay in Haskell, and loops of 2^20 scalar draws, against
+-- | Fills of 2^22 values, short fills of 512 values, and loops of 2^20 scalar draws, against
 -- random's StdGen (SplitMix) and mwc-random. Prints Markdown rows in GiB/s of output, 8 bytes
--- per scalar draw.
+-- per scalar draw. The cbits flag selects native or Haskell fills for both fill sizes.
 module Main (main) where
 
 import Control.Monad.ST (ST, runST)
